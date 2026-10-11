@@ -156,3 +156,16 @@ Before 0.4.2 the plugin was called `agentpanel`. To switch, run `herdr plugin un
 install `flowy11/agent-panel`.
 
 Run the provider regression tests with `node --test test/*.test.mjs`.
+
+## Header (chrysa fork)
+
+A few lines of your own above the tab bar: account, model, folder, git state, the
+project's services... To turn it on, write the absolute path of an executable in
+`~/.config/herdr/plugins/config/agent-panel/header-command`. Every 3 seconds it runs in
+the agent's folder with `<cwd> <provider> <session id> <agent pane id>` as arguments;
+its first 6 non-empty lines of output are shown (colors kept, other control sequences
+dropped). Without that file nothing runs.
+
+While the panel shows an agent, `~/.local/state/agent-panel/shown/<agent pane id>` holds
+the panel's pid, so a status line can hide what the panel already shows
+(check the pid is alive: a closed pane may leave the file behind).

@@ -10,6 +10,7 @@ import { spawn } from "node:child_process";
 import { LABEL, PLUGIN_ID, PLUGIN_LABELS, STATE_DIR, herdr, isAgentPane, setDismissed, snapshot } from "./lib.mjs";
 import { createSession, paneSession, readConversation } from "./providers.mjs";
 import { viewInClaude } from "./jump.mjs";
+import { fitLine, headerLines, markShown, unmarkShown } from "./header.mjs";
 import { displayPath } from "./refs.mjs";
 import { WHO, c, plain, width, fit, fitMiddle, wrap, dur, ago, firstLine, spread, copyText } from "./text.mjs";
 
@@ -83,7 +84,7 @@ function pickAgent() {
   const focused = panes.find((p) => p.pane_id === snap.focused_pane_id);
   const still = tracked && panes.find((p) => p.pane_id === tracked.paneId);
   const pick = isEligible(focused) ? focused : isEligible(still) ? still : panes.find(isEligible);
-  if (!pick) { tracked = null; session = null; return; }
+  if (!pick) { tracked = null; session = null; markShown(""); return; }
   // The session on screen, which differs from herdr's record after Claude's ← agent view switches it,
   // and after a resume that carried on in a new transcript.
   const sessionId = paneSession(pick, pickAgent);
@@ -96,6 +97,7 @@ function pickAgent() {
     refresh();
   }
   tracked = { paneId: pick.pane_id, sessionId, cwd: pick.cwd, status: pick.agent_status };
+  markShown(pick.pane_id);
 }
 
 function refresh() {
@@ -457,6 +459,7 @@ function draw() {
   const where = tracked?.cwd ? path.basename(tracked.cwd) : "";
   const room = w - width(bar) - 1;
   const head = [
+    ...headerLines(tracked, session, render).map((l) => fitLine(l, w)),
     room >= 6 ? spread(bar, `${c.dim}${fit(where, room)}${c.reset}`, w) : bar,
     `${c.dim}${"─".repeat(Math.max(0, w))}${c.reset}`,
   ];
@@ -509,6 +512,7 @@ function quit({ dismiss = false } = {}) {
     const me = (snap?.panes || []).find((p) => p.label === LABEL);
     if (me) setDismissed(me.tab_id, true, new Set((snap.tabs || []).map((t) => t.tab_id)));
   }
+  unmarkShown();
   out.write("\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[?1049l");
   process.exit(0);
 }
