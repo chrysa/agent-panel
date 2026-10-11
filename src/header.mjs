@@ -19,8 +19,9 @@ const COMMAND_FILE = path.join(CONFIG_DIR, "header-command");
 export const SHOWN_DIR = path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local/state"), "agent-panel", "shown");
 const EVERY_MS = 3000;
 const MAX_LINES = 6;
-// Keep colors (SGR), drop every other control sequence or character.
-const unsafe = /\x1b\[[0-9;]*[A-Za-ln-z]|\x1b[^[]|[\x00-\x08\x0b-\x1a\x1c-\x1f\x7f]/g;
+// Keep colors (SGR) only: every other ESC, C0 and C1 control character is dropped, so what
+// is left of any other sequence is plain text.
+const unsafe = /\x1b(?!\[[0-9;]*m)|[\x00-\x08\x0b-\x1a\x1c-\x1f\x7f-\x9f]/g;
 
 let lines = [];
 let key = "";
