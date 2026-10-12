@@ -1,0 +1,33 @@
+name: upstream-sync
+
+# Weekly: open (or refresh) a PR bringing flowy11/agent-panel's main into this fork.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Push upstream main to a branch and open a PR when it has new commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git remote add upstream https://github.com/flowy11/agent-panel.git
+          git fetch upstream main
+          if [ -z "$(git rev-list HEAD..upstream/main)" ]; then
+            echo "up to date"; exit 0
+          fi
+          git push -f origin upstream/main:refs/heads/upstream-main
+          gh pr list --head upstream-main --state open --json number -q '.[0].number' | grep -q . ||
+            gh pr create --base main --head upstream-main \
+              --title "chore: sync flowy11/agent-panel" \
+              --body "New upstream commits. Check the header feature (src/header.mjs) still applies, then merge."
