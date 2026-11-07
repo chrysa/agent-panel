@@ -77,7 +77,7 @@ export function widthFix(layout, agentId, panelId, ratio) {
   const panel = rect(panelId);
   if (!agent || !panel || layout.zoomed) return null;
   const delta = ratio - agent.width / (agent.width + panel.width);
-  if (Math.abs(delta) < 0.02) return null;
+  if (!Number.isFinite(delta) || Math.abs(delta) < 0.02) return null; // NaN: a rect without width
   return ["pane", "resize", "--pane", agentId, "--direction", delta > 0 ? "right" : "left", "--amount", Math.abs(delta).toFixed(3)];
 }
 

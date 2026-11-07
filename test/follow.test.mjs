@@ -21,4 +21,5 @@ test("leaves a split already at the ratio, a zoomed tab, or missing panes", () =
   assert.equal(widthFix(layout(90, 90, true), "a", "p", 0.75), null);
   assert.equal(widthFix(layout(90, 90), "a", "gone", 0.75), null);
   assert.equal(widthFix(undefined, "a", "p", 0.75), null);
+  assert.equal(widthFix({ panes: [{ pane_id: "a", rect: {} }, { pane_id: "p", rect: {} }] }, "a", "p", 0.75), null);
 });
