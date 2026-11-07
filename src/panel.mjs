@@ -12,6 +12,7 @@ import { createSession, paneSession, readConversation } from "./providers.mjs";
 import { viewInClaude } from "./jump.mjs";
 import { fitLine, headerLines, markShown, unmarkShown } from "./header.mjs";
 import { displayPath } from "./refs.mjs";
+import { openingTab } from "./tabs.mjs";
 import { WHO, c, plain, width, fit, fitMiddle, wrap, dur, ago, firstLine, spread, copyText } from "./text.mjs";
 
 const out = process.stdout;
@@ -28,7 +29,8 @@ const ORDER = { running: 0, stalled: 1, failed: 2, killed: 3, done: 4 };
 let tracked = null; // { paneId, sessionId, cwd, status }
 let session = null;
 const TABS = ["subagents", "messages", "refs", "todo"];
-let tab = (() => { try { const t = fs.readFileSync(TAB_FILE, "utf8").trim(); return TABS.includes(t) ? t : TABS[0]; } catch { return TABS[0]; } })();
+const savedTab = () => { try { const t = fs.readFileSync(TAB_FILE, "utf8").trim(); return TABS.includes(t) ? t : TABS[0]; } catch { return TABS[0]; } };
+let tab = savedTab(); // the shown tab; openingTab() may differ from the saved one for a new session
 let refs = []; // what the Refs tab lists: by the Claude message that mentions them, newest first
 let todos = []; // what the To do tab lists: Claude's latest list, in its order, the ones you checked off last
 // Checked-off to-dos: { [sessionId]: [todo id] }.
@@ -95,6 +97,7 @@ function pickAgent() {
     views.refs = { cursor: 0, scroll: 0, expanded: new Set() };
     views.todo = { cursor: 0, scroll: 0, expanded: new Set() };
     refresh();
+    tab = openingTab(savedTab(), { subagents: agents.length + finishedCount, todos: todos.filter((t) => !t.done).length });
   }
   tracked = { paneId: pick.pane_id, sessionId, cwd: pick.cwd, status: pick.agent_status };
   markShown(pick.pane_id);

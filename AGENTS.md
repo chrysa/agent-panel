@@ -11,7 +11,7 @@ the shown-agent marker. Upstream changes arrive through the weekly upstream-sync
 
 ## Commands
 
-- `node --test test/` — run the tests.
+- `node --test` — run the tests (Node 24 reads a directory argument as a file).
 - `herdr plugin link . --enabled` — try a local checkout in herdr.
 
 ## Conventions
