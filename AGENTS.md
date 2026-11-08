@@ -32,9 +32,3 @@ the shown-agent marker. Upstream changes arrive through the weekly upstream-sync
 - Touch only what the task needs; mention unrelated problems instead of fixing them.
 - Define a check first (a test, a command), then loop until it passes.
 - Reply short: result first, bullet points over paragraphs, long reports in a file.
-
-## Product design contract
-
-Before UI, component, style, navigation or asset work, read [DESIGN.md](DESIGN.md)
-and any product-specific specification it links. Keep the contract and acceptance
-evidence aligned with UI changes. Load it on demand; do not duplicate its tokens here.
