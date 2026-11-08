@@ -57,7 +57,28 @@ function place() {
   // Also sizes a freshly opened panel, since plugin.pane.open has no ratio.
   const moved = herdr(["pane", "move", paneId, "--tab", tab, "--split", "right", "--target-pane", target.pane_id,
     "--ratio", String(savedRatio()), "--no-focus"]);
-  nudge(moved.json?.result?.move_result?.pane?.pane_id || paneId);
+  const result = moved.json?.result?.move_result;
+  const panelId = result?.pane?.pane_id || paneId;
+  if (result?.changed === false) {
+    const fresh = snapshot();
+    const fix = widthFix((fresh?.layouts || []).find((l) => l.tab_id === tab), target.pane_id, panelId, savedRatio());
+    if (fix) herdr(fix);
+  }
+  nudge(panelId);
+}
+
+// herdr leaves a pane that is already where a move asks untouched and ignores
+// --ratio ("changed": false), so a panel restored at another width (a server
+// restart restores the split) keeps it. Resize the agent/panel split instead:
+// --amount moves the boundary by that share of the split.
+export function widthFix(layout, agentId, panelId, ratio) {
+  const rect = (id) => layout?.panes?.find((p) => p.pane_id === id)?.rect;
+  const agent = rect(agentId);
+  const panel = rect(panelId);
+  if (!agent || !panel || layout.zoomed) return null;
+  const delta = ratio - agent.width / (agent.width + panel.width);
+  if (!Number.isFinite(delta) || Math.abs(delta) < 0.02) return null; // NaN: a rect without width
+  return ["pane", "resize", "--pane", agentId, "--direction", delta > 0 ? "right" : "left", "--amount", Math.abs(delta).toFixed(3)];
 }
 
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
