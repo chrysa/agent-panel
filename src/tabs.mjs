@@ -7,3 +7,10 @@ export function openingTab(saved, { subagents = 0, todos = 0 } = {}) {
   if (saved !== "subagents" || subagents > 0) return saved;
   return todos > 0 ? "todo" : "messages";
 }
+
+// The tab under a click. The tab bar sits below the header lines (account, git,
+// services), so its screen row is not always 1: the render passes its row along.
+export function tabAt(x, y, tabRow, hits) {
+  if (y !== tabRow) return null;
+  return hits.find((h) => x >= h.from && x <= h.to)?.tab ?? null;
+}
