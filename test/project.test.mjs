@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
-import { ciState, filtersOff, gitStatus, parseBranches, parsePulls, parseStatus, parseWorktrees, projectRoots, remoteSlug, repoRoot, scopeMade, summarize } from "../src/project.mjs";
+import { ProjectSummaries, ciState, filtersOff, gitStatus, parseBranches, parsePulls, parseStatus, parseWorktrees, projectRoots, remoteSlug, repoRoot, scopeMade, summarize } from "../src/project.mjs";
 
 const fakeFs = (gits) => (p) => gits.some((g) => p === `${g}/.git`);
 
@@ -94,6 +94,45 @@ test("status in an untrusted repo runs nothing its config names (fsmonitor, filt
     fs.writeFileSync(path.join(dir, "repo", "a.txt"), "three\n");
     const out = await gitStatus(path.join(dir, "repo"));
     assert.match(out, /^# branch\.oid /m);
+    assert.deepEqual(fs.readdirSync(marks), []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("status fails closed: when the repo's filters cannot be read, it does not run", async () => {
+  const calls = [];
+  const runner = (fail) => async (dir, args) => {
+    calls.push(args.includes("status") ? "status" : "config");
+    return args.includes("status") ? { err: null, stdout: "# branch.oid x\n" } : fail;
+  };
+  const tooBig = Object.assign(new RangeError("stdout maxBuffer length exceeded"), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" });
+  assert.equal(await gitStatus("/r", runner({ err: tooBig, stdout: "filter.pad.v AAAA" })), null);
+  assert.equal(await gitStatus("/r", runner({ err: Object.assign(new Error("x"), { code: 1 }), stdout: "filter.x.clean y" })), null);
+  assert.deepEqual(calls, ["config", "config"]);
+  assert.equal(await gitStatus("/r", runner({ err: Object.assign(new Error("none"), { code: 1 }), stdout: "" })), "# branch.oid x\n"); // no filter
+});
+
+test("no lazy fetch from a partial clone's promisor remote (its sshCommand never runs)", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-panel-"));
+  const marks = path.join(dir, "marks");
+  fs.mkdirSync(marks);
+  const repo = path.join(dir, "repo");
+  const git = (...args) => execFileSync("git", ["-C", repo, ...args], { stdio: "pipe", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+  fs.mkdirSync(repo);
+  git("init", "-q", "-b", "main");
+  git("config", "remote.origin.url", "ssh://example.invalid/x.git");
+  git("config", "remote.origin.promisor", "true");
+  git("config", "extensions.partialClone", "origin");
+  git("config", "core.sshCommand", `touch ${marks}/ssh; false`);
+  fs.writeFileSync(path.join(repo, ".git", "refs", "heads", "main"), `${"1".repeat(40)}\n`); // HEAD's commit is missing
+  try {
+    try { git("status", "--porcelain"); } catch {} // positive control: plain status fetches it, running sshCommand
+    assert.ok(fs.readdirSync(marks).length > 0, "the control should have run the repo's sshCommand");
+    for (const f of fs.readdirSync(marks)) fs.rmSync(path.join(marks, f));
+    const s = new ProjectSummaries();
+    await s.read(repo, { finished: new Set(), prAt: 0 }, () => {}, Date.now());
+    await gitStatus(repo);
     assert.deepEqual(fs.readdirSync(marks), []);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

@@ -22,7 +22,7 @@ import { displayPath } from "./refs.mjs";
 import { openingTab, tabAt } from "./tabs.mjs";
 import { serviceItems } from "./services.mjs";
 import { MODE, fileIcon, githubIcon, icon } from "./icons.mjs";
-import { ProjectSummaries, projectRoots, scopeMade } from "./project.mjs";
+import { ProjectSummaries, clean, projectRoots, scopeMade } from "./project.mjs";
 import { foldState, sectioned } from "./sections.mjs";
 import { WHO, c, plain, width, fit, fitMiddle, wrap, dur, ago, firstLine, spread, copyText } from "./text.mjs";
 
@@ -200,7 +200,7 @@ function refresh() {
   const order = (x) => (x.kind === "file" && several ? projectRootsNow.indexOf(rootOf(x.value)) : -1);
   const outside = (x) => Number(!!x.outside);
   made = scopeMade(outs ? outs.made() : [], projectRootsNow, slugs)
-    .map((x) => (several && x.kind === "file" && !x.outside ? { ...x, group: path.basename(rootOf(x.value) || "") } : x))
+    .map((x) => (several && x.kind === "file" && !x.outside ? { ...x, group: clean(path.basename(rootOf(x.value) || "")) } : x))
     .map((x, n) => ({ x, n })) // files of one repo together (in the project's order), newest first inside; outside last
     .sort((a, b) => outside(a.x) - outside(b.x) || (a.x.kind === "file" && b.x.kind === "file" ? order(a.x) - order(b.x) || a.n - b.n : a.n - b.n))
     .map(({ x }) => x);
@@ -482,7 +482,7 @@ function repoItemsOf(summaries) {
   for (const s of summaries) {
     if (s.slug && seen.has(s.slug)) continue;
     if (s.slug) seen.add(s.slug);
-    const repo = s.slug || path.basename(s.root);
+    const repo = s.slug || clean(path.basename(s.root));
     items.push({ kind: "repo-head", repo, root: s.root, title: repo, value: s.slug ? `https://github.com/${s.slug}` : s.root,
       ghError: s.ghError, loading: s.loading, counts: [s.pulls.length, s.worktrees.length, s.branches.length], ts: 0 });
     for (const p of s.pulls) items.push({ kind: "pull", repo, root: s.root, ...p, value: p.url, title: `#${p.number} ${p.title}` });

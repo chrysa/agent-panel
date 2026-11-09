@@ -10,9 +10,13 @@
 // shell; their text is stripped of control characters before it reaches the terminal.
 //
 // The repos come from files the agent edited, so a repo may be untrusted (an unpacked archive
-// with its own .git). Of the git commands run here, only `status` can start a program a repo's
-// config names: core.fsmonitor, a filter driver (clean/process) its .gitattributes picks, and
-// the same in submodules. gitStatus() turns those off; no hook runs for these commands.
+// with its own .git). A repo's config can name programs that read-only git commands start:
+// - any command reading a missing object of a "partial clone" fetches it from the promisor
+//   remote, and that fetch runs the repo's core.sshCommand or uploadpack: every git call here
+//   runs with GIT_NO_LAZY_FETCH=1 and protocol.allow=never (no transport at all);
+// - `status` runs core.fsmonitor, the filter drivers (clean/process) its .gitattributes picks,
+//   and the same in submodules: gitStatus() turns those off, and skips status when it cannot
+//   read the repo's filters (it fails closed). No hook runs for these commands.
 import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -21,7 +25,7 @@ const MAX_REPOS = 3;
 const LONG_LIVED = new Set(["main", "master", "develop", "staging", "production"]); // never "without a PR"
 const PR_EVERY_MS = 30_000;
 const GIT_EVERY_MS = 5_000;
-const clean = (s) => String(s ?? "").replace(/[\x00-\x1f\x7f-\x9f]/g, "");
+export const clean = (s) => String(s ?? "").replace(/[\x00-\x1f\x7f-\x9f]/g, "");
 
 const roots = new Map(); // folder -> its work tree root, or "" (cached: folders do not move)
 // The work tree holding a folder or file: the nearest parent with a .git entry.
@@ -147,9 +151,16 @@ export function summarize({ root, pulls, worktrees, statuses, branches, defaultB
   };
 }
 
-const run = (cmd, args, cwd) => new Promise((resolve) => {
-  execFile(cmd, args, { cwd, timeout: 15_000, maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => resolve(err ? null : stdout));
+// -> { err, stdout }: err is null, or execFile's error (its `code`: the exit code, or a string
+// such as ERR_CHILD_PROCESS_STDIO_MAXBUFFER).
+const exec = (cmd, args, cwd, env) => new Promise((resolve) => {
+  execFile(cmd, args, { cwd, env, timeout: 15_000, maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => resolve({ err, stdout: String(stdout ?? "") }));
 });
+const run = async (cmd, args, cwd) => { const r = await exec(cmd, args, cwd); return r.err ? null : r.stdout; };
+// Read-only git in a repo that may be untrusted: no lazy fetch, no transport, no prompt.
+const GIT_ENV = { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" };
+const runGit = (dir, args) => exec("git", ["-C", dir, "-c", "protocol.allow=never", ...args], dir, GIT_ENV);
+const git = async (dir, args) => { const r = await runGit(dir, args); return r.err ? null : r.stdout; };
 
 // The filter drivers a repo's config defines (reading config starts nothing), each switched
 // off with `-c`; null when a driver's name could not be passed safely (status is then skipped).
@@ -163,12 +174,18 @@ export function filtersOff(configText) {
   return [...names].flatMap((n) => ["-c", `filter.${n}.clean=`, "-c", `filter.${n}.smudge=`, "-c", `filter.${n}.process=`, "-c", `filter.${n}.required=false`]);
 }
 
-// `git status --porcelain=v2 --branch` in a work tree, with nothing the repo's config names run.
-export async function gitStatus(dir, exec = run) {
-  const off = filtersOff(await exec("git", ["-C", dir, "config", "--get-regexp", "^filter\\."], dir));
+// `git status --porcelain=v2 --branch` in a work tree, with nothing the repo's config names run;
+// null when it did not run. Reading the filters must succeed, or end with exit 1 and no output
+// (no filter): any other failure (output past maxBuffer, timeout...) skips status.
+export async function gitStatus(dir, runner = runGit) {
+  const cfg = await runner(dir, ["config", "--get-regexp", "^filter\\."]);
+  const none = cfg.err?.code === 1 && !cfg.stdout;
+  if (cfg.err && !none) return null;
+  const off = filtersOff(none ? "" : cfg.stdout);
   if (!off) return null;
-  return exec("git", ["-C", dir, "--no-optional-locks", "-c", "core.fsmonitor=false", ...off,
-    "status", "--porcelain=v2", "--branch", "--ignore-submodules=all"], dir);
+  const st = await runner(dir, ["--no-optional-locks", "-c", "core.fsmonitor=false", ...off,
+    "status", "--porcelain=v2", "--branch", "--ignore-submodules=all"]);
+  return st.err ? null : st.stdout;
 }
 
 // Background reader of the summaries; summaries(roots, onChange) never blocks.
@@ -197,10 +214,10 @@ export class ProjectSummaries {
     r.busy = true;
     try {
       const [remote, head, list, refs] = await Promise.all([
-        run("git", ["-C", root, "config", "--get", "remote.origin.url"], root),
-        run("git", ["-C", root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], root),
-        run("git", ["-C", root, "worktree", "list", "--porcelain"], root),
-        run("git", ["-C", root, "for-each-ref", "--format=%(refname)%09%(committerdate:unix)", "refs/heads", "refs/remotes/origin"], root),
+        git(root, ["config", "--get", "remote.origin.url"]),
+        git(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]),
+        git(root, ["worktree", "list", "--porcelain"]),
+        git(root, ["for-each-ref", "--format=%(refname)%09%(committerdate:unix)", "refs/heads", "refs/remotes/origin"]),
       ]);
       r.slug = remoteSlug(remote);
       r.defaultBranch = clean((head || "").trim().replace(/^origin\//, "")) || "main";

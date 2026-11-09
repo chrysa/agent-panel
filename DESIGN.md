@@ -66,8 +66,9 @@ Primary action per tab: *Subagents* — open the running subagent; *Messages* �
   Space on the last lists all) → Enter opens the PR, the worktree's folder or the pushed
   branch. *Made* is scoped to the same project: its files (grouped by repo when several) and
   GitHub items of its repos, and published pages; the rest sits in *OUTSIDE THE PROJECT*,
-  folded. `git status` runs with the repo's fsmonitor, filter drivers and submodules switched
-  off (a repo reached through an edited file is not trusted). **[implemented]** ([project.mjs](src/project.mjs))
+  folded. A repo reached through an edited file is not trusted: git runs without lazy fetch or
+  transport (`GIT_NO_LAZY_FETCH=1`, `protocol.allow=never`), and `git status` with the repo's
+  fsmonitor, filter drivers and submodules switched off, skipped when its filters cannot be read. **[implemented]** ([project.mjs](src/project.mjs))
 - **J8 — Fold sections (fork):** in *Refs*, *Made*, *Apps* and *Repo* each section has a header
   with its item count (`▾ FILES · 12`); click or Space folds it (`▸`) or unfolds it, and the
   cursor reaches a folded header like any item. Enter on a message header (*Refs*) shows the
@@ -166,7 +167,7 @@ are code points of the user's own Nerd Font.
   | Date | Change | Checks run (tool, sizes, modes) | Result | Not run, and why |
   | --- | --- | --- | --- | --- |
   | 2026-11-08 | contract written from the code | source review | gaps listed in §11 | no terminal run: documentation-only change |
-  | 2026-11-09 | Sections that fold, with counts; Made/Refs split by action; rows never wrap (fork) | `node --test` (38, with a real repo whose fsmonitor and filter would run: they do under plain `git status`, not under the panel's); panel outside herdr (tmux 44, 66 and 110 columns, `AGENT_PANEL_ICONS=nerd`) on this session: Made, Refs, Apps, Repo | headers `▾ LABEL · N`, Space folds, *OUTSIDE THE PROJECT* folded, *READ BY THE AGENT* in Refs, no row wider than the panel, every tab counted | not run inside herdr before merge |
+  | 2026-11-09 | Sections that fold, with counts; Made/Refs split by action; rows never wrap (fork) | `node --test` (40, with real repos whose fsmonitor, filter and partial-clone sshCommand run under plain `git status` and not under the panel's git calls); panel outside herdr (tmux 44, 66 and 110 columns, `AGENT_PANEL_ICONS=nerd`) on this session: Made, Refs, Apps, Repo | headers `▾ LABEL · N`, Space folds, *OUTSIDE THE PROJECT* folded, *READ BY THE AGENT* in Refs, no row wider than the panel, every tab counted | not run inside herdr before merge |
   | 2026-11-09 | Repo tab, Made scoped to the project (fork) | `node --test` (33); panel outside herdr (tmux 76×40) with the agent in herdr-cockpit (1 repo), in padam-av (Optiways, 21 PRs through the scope's account) and in a folder of repos (3 repos, files grouped) | sections, CI and review marks, branch filtering as specified | not run inside herdr before merge |
   | 2026-11-09 | Nerd Font pictograms (fork, opt-in) | `node --test` (27); panel outside herdr, tmux 72×26, `AGENT_PANEL_ICONS=nerd` and `plain` | nerd: pictogram tab bar, kind and file-type glyphs; plain: unchanged | not run inside herdr before merge |
   | 2026-11-09 | Made and Apps tabs, file watching (fork) | `node --test` (24); panel run outside herdr (`SA_SESSION`, tmux 70×40) on a real session: Made 62 items, Apps services/background/panes | sections, glyphs and empty states as specified | not run inside herdr before merge (the installed plugin is pinned) |

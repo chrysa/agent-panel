@@ -208,9 +208,11 @@ Enter opens the PR, the worktree's folder, or a pushed branch on GitHub (a local
 copies its name). Without `gh` or network the header says `GitHub unavailable` and git data
 stays.
 
-The repos may come from files the agent edited, so the panel trusts none of them: of its git
-commands only `status` could start a program a repo's config names, and it runs with
-`core.fsmonitor=false`, every filter driver switched off and submodules ignored.
+The repos may come from files the agent edited, so the panel trusts none of them. Every git
+call runs with `GIT_NO_LAZY_FETCH=1` and `protocol.allow=never`: a "partial clone" config can
+no longer make a read fetch a missing object (that fetch would run the repo's `core.sshCommand`
+or `uploadpack`). `status` also runs with `core.fsmonitor=false`, every filter driver switched
+off and submodules ignored, and is skipped when the repo's filters cannot be read.
 
 ## Sections and counts (chrysa fork)
 
