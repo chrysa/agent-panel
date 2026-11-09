@@ -182,6 +182,15 @@ section is empty.
 The panel redraws as soon as the agent's transcript or its subagents folder changes
 (file watching); the one-second timer stays as a fallback.
 
+## Pictograms (chrysa fork)
+
+With a Nerd Font (v3) in your terminal, write `nerd` in
+`~/.config/herdr/plugins/config/agent-panel/icons` (or set `AGENT_PANEL_ICONS=nerd`): each tab
+gets a pictogram (alone when the panel is narrow), Made/Apps/Refs items one by kind (page, PR,
+issue, release, push, service, command, browser, pane) and files one by type (Python,
+JavaScript, Markdown, shell, config...). The header and services commands receive
+`AGENT_PANEL_ICONS` to follow. Off by default: the panel looks as upstream's.
+
 ## Header (chrysa fork)
 
 A few lines of your own above the tab bar: account, model, folder, git state, the

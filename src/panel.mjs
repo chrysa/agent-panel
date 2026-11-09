@@ -17,6 +17,7 @@ import { fitLine, headerLines, markShown, unmarkShown } from "./header.mjs";
 import { displayPath } from "./refs.mjs";
 import { openingTab, tabAt } from "./tabs.mjs";
 import { serviceItems } from "./services.mjs";
+import { MODE, fileIcon, githubIcon, icon } from "./icons.mjs";
 import { WHO, c, plain, width, fit, fitMiddle, wrap, dur, ago, firstLine, spread, copyText } from "./text.mjs";
 
 const out = process.stdout;
@@ -315,12 +316,14 @@ function refRows(w, now) {
     if (r.kind === "file") try { stat = fs.statSync(r.value); } catch {}
     const missing = r.kind === "file" && !stat;
     const edited = r.kind === "file" && session.edited.has(r.value);
-    const icon = r.kind === "url" ? `${c.cyan}↗${c.reset}` : missing ? `${c.dim}?${c.reset}` : `${c.dim}▤${c.reset}`;
+    const pict = r.kind === "url" ? icon("url") : fileIcon(r.value, { dir: !!stat?.isDirectory() });
+    const glyph = missing ? `${c.dim}?${c.reset}` : pict ? `${r.kind === "url" ? c.cyan : c.dim}${pict.trim()}${c.reset}`
+      : r.kind === "url" ? `${c.cyan}↗${c.reset}` : `${c.dim}▤${c.reset}`;
     const right = edited ? `${c.cyan}✎${c.reset}` : "";
     const name = r.kind === "url" ? r.value.replace(/^https?:\/\//, "") : displayPath(r.value, cwd) + (stat?.isDirectory() ? "/" : "") + (r.line ? `:${r.line}` : "");
     const title = fitMiddle(name, w - width(right) - 5);
     const style = missing ? c.dim : "";
-    rows.push({ text: spread(`${mark} ${icon} ${style}${title}${c.reset}`, right, w), i });
+    rows.push({ text: spread(`${mark} ${glyph} ${style}${title}${c.reset}`, right, w), i });
     if (v.expanded.has(r.value)) {
       for (const line of wrap(r.value, w - 6).slice(0, 4)) rows.push({ text: `      ${line}`, i });
       if (missing) rows.push({ text: `      ${c.dim}not on disk${c.reset}`, i });
@@ -366,6 +369,7 @@ function todoRows(w, now) {
 }
 
 // Fork: Made and Apps rows. One line each: an icon, the title, its age; Space shows the full value.
+const ITEM_COLOR = { page: c.cyan, github: c.magenta, browser: c.cyan, pane: c.blue };
 const ITEM_ICON = {
   page: `${c.cyan}◆${c.reset}`, github: `${c.magenta}⎇${c.reset}`, file: `${c.dim}▤${c.reset}`,
   service: null, task: null, browser: `${c.cyan}◎${c.reset}`, pane: `${c.blue}▣${c.reset}`,
@@ -374,6 +378,14 @@ const SECTION = {
   page: "PAGES", github: "GITHUB", file: "FILES", service: "SERVICES", task: "BACKGROUND",
   browser: "BROWSER", pane: "HERDR PANES",
 };
+const SECTION_ICON = { page: "page", github: "github", file: "files", service: "service", task: "task", browser: "browser", pane: "pane" };
+// Fork: the item's own pictogram (file by extension, PR/issue/release/push...), "" when they are off.
+function kindIcon(x) {
+  if (x.kind === "file") return fileIcon(x.value);
+  if (x.kind === "github") return githubIcon(x.title);
+  if (x.kind === "browser") return icon(x.tool === "Playwright" ? "playwright" : "browser");
+  return icon(x.kind);
+}
 function itemRows(list, view, w, now, empty) {
   const rows = [];
   const cwd = tracked?.cwd || session?.cwd || "";
@@ -384,13 +396,17 @@ function itemRows(list, view, w, now, empty) {
     if (group !== section) {
       if (rows.length) rows.push({ text: "", i: -1 });
       const n = list.filter((y) => (y.kind === "task" ? (live(y) ? "task" : "task-done") : y.kind) === group).length;
-      rows.push({ text: `${c.dim}${group === "task-done" ? "FINISHED" : SECTION[x.kind]} · ${n}${c.reset}`, i: -1 });
+      const pict = group === "task-done" ? icon("finished") : icon(SECTION_ICON[x.kind]);
+      rows.push({ text: `${c.dim}${pict}${group === "task-done" ? "FINISHED" : SECTION[x.kind]} · ${n}${c.reset}`, i: -1 });
       section = group;
     }
-    const icon = x.kind === "service" ? (x.up ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`)
+    const pict = kindIcon(x);
+    const state = x.kind === "service" ? (x.up ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`)
       : x.kind === "task" ? ICON[x.status] || ICON.done
       : x.kind === "file" ? (x.written ? `${c.green}✚${c.reset}` : `${c.cyan}✎${c.reset}`)
-      : ITEM_ICON[x.kind];
+      : null;
+    // A state glyph (meaning without colour) then the pictogram; kinds without a state show the pictogram alone.
+    const glyph = state ? `${state} ${pict}` : pict ? `${ITEM_COLOR[x.kind] || ""}${pict}${c.reset}` : `${ITEM_ICON[x.kind]} `;
     const name = x.kind === "file" ? displayPath(x.value, cwd)
       : x.kind === "service" ? `${x.title}${x.value ? ` ${c.dim}${x.value.replace(/^https?:\/\//, "")}${c.reset}` : ""}`
       : x.kind === "browser" ? (x.title || x.value.replace(/^https?:\/\//, ""))
@@ -399,7 +415,7 @@ function itemRows(list, view, w, now, empty) {
     const age = x.kind === "service" ? "" : `${c.dim}${ago(now - (x.kind === "task" && x.ended ? x.ended : x.ts))}${c.reset}`;
     const room = w - width(age) - 5;
     const title = x.kind === "file" ? fitMiddle(name, room) : width(name) > room ? fit(plain(name), room) : name;
-    rows.push({ text: spread(`  ${icon} ${title}${c.reset}`, age, w), i });
+    rows.push({ text: spread(`  ${glyph}${title}${c.reset}`, age, w), i });
     if (view.expanded.has(itemKey(x)) && x.value) for (const line of wrap(x.value, w - 6).slice(0, 4)) rows.push({ text: `      ${c.dim}${line}${c.reset}`, i });
   });
   if (!list.length) rows.push({ text: `${c.dim}  ${session ? empty : "No supported agent session in this tab"}${c.reset}`, i: -1 });
@@ -555,6 +571,9 @@ function draw() {
     { messages: "M", subagents: "A", refs: "R", todo: "D", made: "O", apps: "P" },
   ];
   let bar = "";
+  if (MODE === "nerd") { // fork: a pictogram before each name; the narrowest bar keeps only the pictogram
+    for (const name of TABS) { names[0][name] = icon(name) + names[0][name]; names[1][name] = icon(name) + names[1][name]; names[2][name] = icon(name).trim(); }
+  }
   for (const set of names) {
     let col = 2;
     bar = "";

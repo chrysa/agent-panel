@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { PLUGIN_ID } from "./lib.mjs";
+import { MODE } from "./icons.mjs";
 
 const CONFIG_DIR = process.env.HERDR_PLUGIN_CONFIG_DIR || path.join(os.homedir(), ".config/herdr/plugins/config", PLUGIN_ID);
 const COMMAND_FILE = path.join(CONFIG_DIR, "services-command");
@@ -44,7 +45,7 @@ export function serviceItems(tracked, session, onChange) {
   if (!running && Date.now() - last > EVERY_MS) {
     running = true;
     last = Date.now();
-    execFile(cmd, args, { cwd: tracked.cwd, timeout: 2500, maxBuffer: 64 * 1024 }, (err, stdout) => {
+    execFile(cmd, args, { cwd: tracked.cwd, env: { ...process.env, AGENT_PANEL_ICONS: MODE }, timeout: 2500, maxBuffer: 64 * 1024 }, (err, stdout) => {
       running = false;
       if (k !== key) return;
       const next = err ? [] : parseServices(stdout, items[0]?.ts || Date.now());
