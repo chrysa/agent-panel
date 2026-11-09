@@ -13,7 +13,7 @@
 // with its own .git). A repo's config can name programs that read-only git commands start:
 // - any command reading a missing object of a "partial clone" fetches it from the promisor
 //   remote, and that fetch runs the repo's core.sshCommand or uploadpack: every git call here
-//   runs with GIT_NO_LAZY_FETCH=1 and protocol.allow=never (no transport at all);
+//   runs with --no-lazy-fetch, GIT_NO_LAZY_FETCH=1 and every transport refused;
 // - `status` runs core.fsmonitor, the filter drivers (clean/process) its .gitattributes picks,
 //   and the same in submodules: gitStatus() turns those off, and skips status when it cannot
 //   read the repo's filters (it fails closed). No hook runs for these commands.
@@ -157,9 +157,13 @@ const exec = (cmd, args, cwd, env) => new Promise((resolve) => {
   execFile(cmd, args, { cwd, env, timeout: 15_000, maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => resolve({ err, stdout: String(stdout ?? "") }));
 });
 const run = async (cmd, args, cwd) => { const r = await exec(cmd, args, cwd); return r.err ? null : r.stdout; };
-// Read-only git in a repo that may be untrusted: no lazy fetch, no transport, no prompt.
-const GIT_ENV = { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" };
-const runGit = (dir, args) => exec("git", ["-C", dir, "-c", "protocol.allow=never", ...args], dir, GIT_ENV);
+// Read-only git in a repo that may be untrusted: no lazy fetch (--no-lazy-fetch: a git older
+// than 2.45.1 rejects it, so every call fails closed), no prompt, no ssh program, and every
+// transport refused: protocol.<name>.allow set here beats the repo's own, protocol.allow alone does not.
+const GIT_ENV = { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: "false" };
+const NO_TRANSPORT = ["protocol.allow=never", ...["ssh", "file", "git", "http", "https", "ext"].map((p) => `protocol.${p}.allow=never`)]
+  .flatMap((c) => ["-c", c]);
+const runGit = (dir, args) => exec("git", ["--no-lazy-fetch", "-C", dir, ...NO_TRANSPORT, ...args], dir, GIT_ENV);
 const git = async (dir, args) => { const r = await runGit(dir, args); return r.err ? null : r.stdout; };
 
 // The filter drivers a repo's config defines (reading config starts nothing), each switched

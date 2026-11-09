@@ -209,7 +209,8 @@ copies its name). Without `gh` or network the header says `GitHub unavailable` a
 stays.
 
 The repos may come from files the agent edited, so the panel trusts none of them. Every git
-call runs with `GIT_NO_LAZY_FETCH=1` and `protocol.allow=never`: a "partial clone" config can
+call runs with `--no-lazy-fetch` (an older git than 2.45.1 refuses it: nothing runs) and every
+transport refused (`protocol.<name>.allow=never`, which the repo cannot override): a "partial clone" config can
 no longer make a read fetch a missing object (that fetch would run the repo's `core.sshCommand`
 or `uploadpack`). `status` also runs with `core.fsmonitor=false`, every filter driver switched
 off and submodules ignored, and is skipped when the repo's filters cannot be read.

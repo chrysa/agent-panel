@@ -67,7 +67,7 @@ Primary action per tab: *Subagents* — open the running subagent; *Messages* �
   branch. *Made* is scoped to the same project: its files (grouped by repo when several) and
   GitHub items of its repos, and published pages; the rest sits in *OUTSIDE THE PROJECT*,
   folded. A repo reached through an edited file is not trusted: git runs without lazy fetch or
-  transport (`GIT_NO_LAZY_FETCH=1`, `protocol.allow=never`), and `git status` with the repo's
+  transport (`--no-lazy-fetch`, `protocol.<name>.allow=never` per protocol), and `git status` with the repo's
   fsmonitor, filter drivers and submodules switched off, skipped when its filters cannot be read. **[implemented]** ([project.mjs](src/project.mjs))
 - **J8 — Fold sections (fork):** in *Refs*, *Made*, *Apps* and *Repo* each section has a header
   with its item count (`▾ FILES · 12`); click or Space folds it (`▸`) or unfolds it, and the

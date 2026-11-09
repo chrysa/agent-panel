@@ -125,6 +125,7 @@ test("no lazy fetch from a partial clone's promisor remote (its sshCommand never
   git("config", "remote.origin.promisor", "true");
   git("config", "extensions.partialClone", "origin");
   git("config", "core.sshCommand", `touch ${marks}/ssh; false`);
+  git("config", "protocol.ssh.allow", "always"); // the repo re-allowing ssh does not get past the panel
   fs.writeFileSync(path.join(repo, ".git", "refs", "heads", "main"), `${"1".repeat(40)}\n`); // HEAD's commit is missing
   try {
     try { git("status", "--porcelain"); } catch {} // positive control: plain status fetches it, running sshCommand
