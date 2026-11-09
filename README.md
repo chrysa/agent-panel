@@ -99,6 +99,7 @@ or cleared after that):
 | `y` | Refs, Made, Apps, Repo: copy the URL, path or branch · To do: copy the request |
 | `x` | To do: check off or reopen |
 | `f` / click the header | Subagents: fold or unfold the Finished section |
+| Space / click a header | Refs, Made, Apps, Repo: fold or unfold that section (fork) |
 | `q` | Close it in this tab; it still follows you to other Claude tabs. The **agent-panel: show / hide** action brings it back here |
 
 Data comes from Claude Code's own files: the session transcript, each subagent's transcript under
@@ -162,8 +163,11 @@ Run the provider regression tests with `node --test test/*.test.mjs`.
 Two more tabs, filled from the agent's own tool calls and their results (Claude sessions):
 
 - **Made**: Claude pages it published with the Artifact tool (◆, the link to the page),
-  GitHub pull requests, issues and releases its commands printed and branches it pushed (⎇),
-  and files it wrote (✚) or edited (✎). Newest first in each section.
+  what it did on GitHub (⎇): pull requests, issues and releases a command of its created or
+  changed (`gh pr|issue|release create/merge/close/edit/comment/review…`, a `gh api` call that
+  is not a GET) and branches it pushed, and files it wrote (✚) or edited (✎). Newest first in
+  each section. The GitHub links its other commands only printed (a list, a view) are in
+  **Refs**, under **READ BY THE AGENT**.
 - **Apps**: the project's services (● up, ○ down, from your `services-command`, below),
   background commands (● running, ◌ silent for 30 min, ✓ ⊘ ✗ when they end; their output
   file opens), browser tabs it drives through the Chrome extension or Playwright (◎, title
@@ -185,8 +189,9 @@ The panel redraws as soon as the agent's transcript or its subagents folder chan
 ## Repo, and the project scope (chrysa fork)
 
 The panel works on the agent's **project**: the git work tree of its folder, or, when that
-folder holds many repos, the repos the session edited (3 at most). **Made** keeps only that
-project's files (one section per repo when several) and GitHub items; published pages stay.
+folder holds many repos, the repos the session edited (3 at most). **Made** shows that
+project's files (one section per repo when several) and GitHub items, and published pages;
+everything else it made (scratch files, other repos) is in **OUTSIDE THE PROJECT**, folded.
 
 **Repo** sums each project repo up:
 
@@ -202,6 +207,19 @@ project's files (one section per repo when several) and GitHub items; published 
 Enter opens the PR, the worktree's folder, or a pushed branch on GitHub (a local branch: `y`
 copies its name). Without `gh` or network the header says `GitHub unavailable` and git data
 stays.
+
+The repos may come from files the agent edited, so the panel trusts none of them: of its git
+commands only `status` could start a program a repo's config names, and it runs with
+`core.fsmonitor=false`, every filter driver switched off and submodules ignored.
+
+## Sections and counts (chrysa fork)
+
+In Refs, Made, Apps and Repo every section has a header with its item count (`▾ FILES · 12`).
+A click or Space on a header folds it (`▸`) or unfolds it; the cursor reaches folded headers
+like any item. Enter on a Refs message header (●) shows that message; on a repo's header, opens
+the repo on GitHub. Every tab shows a count, 0 included: in colour what runs or waits
+(`●` running, `○` to do, `✗` failing CI), else how many items it lists. When the full names do
+not fit, the bar keeps the shown tab's name and pictograms (or letters) for the others.
 
 ## Pictograms (chrysa fork)
 

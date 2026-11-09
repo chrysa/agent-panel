@@ -1,6 +1,10 @@
 import { test } from "node:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
-import { ciState, parseBranches, parsePulls, parseStatus, parseWorktrees, projectRoots, remoteSlug, repoRoot, scopeMade, summarize } from "../src/project.mjs";
+import { ciState, filtersOff, gitStatus, parseBranches, parsePulls, parseStatus, parseWorktrees, projectRoots, remoteSlug, repoRoot, scopeMade, summarize } from "../src/project.mjs";
 
 const fakeFs = (gits) => (p) => gits.some((g) => p === `${g}/.git`);
 
@@ -51,9 +55,47 @@ test("summary: worktrees get their PR; branches without a PR leave out the defau
   assert.deepEqual(s.branches.map((b) => [b.name, b.pushed]), [["old", true]]);
 });
 
-test("Made scoped to the project: its files and repos, pages kept", () => {
+test("Made scoped to the project: other files and repos marked outside, pages kept", () => {
   const items = [{ kind: "file", value: "/w/a/x" }, { kind: "file", value: "/w/b/y" }, { kind: "github", repo: "chrysa/a" },
     { kind: "github", repo: "chrysa/b" }, { kind: "page", value: "https://claude.ai/artifact/1" }];
-  assert.deepEqual(scopeMade(items, ["/w/a"], new Set(["chrysa/a"])).map((x) => x.value || x.repo), ["/w/a/x", "chrysa/a", "https://claude.ai/artifact/1"]);
-  assert.equal(scopeMade(items, [], new Set()).length, 5);
+  assert.deepEqual(scopeMade(items, ["/w/a"], new Set(["chrysa/a"])).filter((x) => !x.outside).map((x) => x.value || x.repo),
+    ["/w/a/x", "chrysa/a", "https://claude.ai/artifact/1"]);
+  assert.deepEqual(scopeMade(items, ["/w/a"], new Set(["chrysa/a"])).filter((x) => x.outside).map((x) => x.value || x.repo), ["/w/b/y", "chrysa/b"]);
+  assert.equal(scopeMade(items, [], new Set()).filter((x) => x.outside).length, 0);
+});
+
+test("filter drivers are switched off; an odd driver name skips status", () => {
+  assert.deepEqual(filtersOff(null), []);
+  assert.deepEqual(filtersOff("filter.lfs.clean git-lfs clean -- %f\nfilter.lfs.process git-lfs filter-process\n"),
+    ["-c", "filter.lfs.clean=", "-c", "filter.lfs.smudge=", "-c", "filter.lfs.process=", "-c", "filter.lfs.required=false"]);
+  assert.equal(filtersOff("filter.a b.clean x\n"), null);
+});
+
+test("status in an untrusted repo runs nothing its config names (fsmonitor, filters)", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-panel-"));
+  const marks = path.join(dir, "marks");
+  fs.mkdirSync(marks);
+  const git = (...args) => execFileSync("git", ["-C", path.join(dir, "repo"), ...args], { stdio: "pipe" });
+  fs.mkdirSync(path.join(dir, "repo"));
+  git("init", "-q");
+  git("config", "user.email", "t@example.invalid");
+  git("config", "user.name", "t");
+  fs.writeFileSync(path.join(dir, "repo", "a.txt"), "one\n");
+  git("add", "a.txt");
+  git("commit", "-qm", "x");
+  git("config", "core.fsmonitor", `touch ${marks}/fsmonitor; false`);
+  git("config", "filter.evil.clean", `touch ${marks}/filter; cat`);
+  fs.writeFileSync(path.join(dir, "repo", ".gitattributes"), "* filter=evil\n");
+  fs.writeFileSync(path.join(dir, "repo", "a.txt"), "two\n");
+  try {
+    git("status", "--porcelain"); // positive control: plain status runs them
+    assert.ok(fs.readdirSync(marks).length > 0, "the control should have run the repo's commands");
+    for (const f of fs.readdirSync(marks)) fs.rmSync(path.join(marks, f));
+    fs.writeFileSync(path.join(dir, "repo", "a.txt"), "three\n");
+    const out = await gitStatus(path.join(dir, "repo"));
+    assert.match(out, /^# branch\.oid /m);
+    assert.deepEqual(fs.readdirSync(marks), []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

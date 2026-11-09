@@ -8,6 +8,11 @@
 // open pull requests (`gh pr list`, every PR_EVERY_MS), worktrees and branches without a
 // pull request (`git`, every GIT_EVERY_MS). Commands run with an argument list, never a
 // shell; their text is stripped of control characters before it reaches the terminal.
+//
+// The repos come from files the agent edited, so a repo may be untrusted (an unpacked archive
+// with its own .git). Of the git commands run here, only `status` can start a program a repo's
+// config names: core.fsmonitor, a filter driver (clean/process) its .gitattributes picks, and
+// the same in submodules. gitStatus() turns those off; no hook runs for these commands.
 import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -146,6 +151,26 @@ const run = (cmd, args, cwd) => new Promise((resolve) => {
   execFile(cmd, args, { cwd, timeout: 15_000, maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => resolve(err ? null : stdout));
 });
 
+// The filter drivers a repo's config defines (reading config starts nothing), each switched
+// off with `-c`; null when a driver's name could not be passed safely (status is then skipped).
+export function filtersOff(configText) {
+  const names = new Set();
+  for (const line of String(configText || "").split("\n")) {
+    const m = line.match(/^filter\.(.+?)\.(?:clean|smudge|process|required)\s/i);
+    if (m) names.add(m[1]);
+  }
+  if ([...names].some((n) => !/^[\w.-]+$/.test(n))) return null;
+  return [...names].flatMap((n) => ["-c", `filter.${n}.clean=`, "-c", `filter.${n}.smudge=`, "-c", `filter.${n}.process=`, "-c", `filter.${n}.required=false`]);
+}
+
+// `git status --porcelain=v2 --branch` in a work tree, with nothing the repo's config names run.
+export async function gitStatus(dir, exec = run) {
+  const off = filtersOff(await exec("git", ["-C", dir, "config", "--get-regexp", "^filter\\."], dir));
+  if (!off) return null;
+  return exec("git", ["-C", dir, "--no-optional-locks", "-c", "core.fsmonitor=false", ...off,
+    "status", "--porcelain=v2", "--branch", "--ignore-submodules=all"], dir);
+}
+
 // Background reader of the summaries; summaries(roots, onChange) never blocks.
 export class ProjectSummaries {
   constructor() {
@@ -159,7 +184,7 @@ export class ProjectSummaries {
         r = { slug: "", defaultBranch: "", pulls: null, finished: new Set(), ghError: false, worktrees: [], statuses: {}, branches: [], gitAt: 0, prAt: 0, busy: false };
         this.repos.set(root, r);
       }
-      if (!r.busy && (now - r.gitAt > GIT_EVERY_MS || (r.slug && now - r.prAt > PR_EVERY_MS))) this.read(root, r, onChange, now);
+      if (!r.busy && (now - r.gitAt > GIT_EVERY_MS || (r.slug && now - r.prAt > PR_EVERY_MS))) this.read(root, r, onChange, now).catch(() => {}); // read() never throws; its finally redraws
     }
     return rootsList.map((root) => {
       const r = this.repos.get(root);
@@ -183,7 +208,7 @@ export class ProjectSummaries {
       r.branches = parseBranches(refs || "");
       const statuses = {};
       await Promise.all(r.worktrees.map(async (w) => {
-        const s = await run("git", ["-C", w.path, "status", "--porcelain=v2", "--branch"], w.path);
+        const s = await gitStatus(w.path);
         if (s !== null) statuses[w.path] = parseStatus(s);
       }));
       r.statuses = statuses;
@@ -205,10 +230,12 @@ export class ProjectSummaries {
   }
 }
 
-// Made scoped to the project: files inside its work trees, GitHub items of its repos,
-// published pages (not tied to a repo). With no project, everything.
+// Made scoped to the project: files outside its work trees and GitHub items of other repos are
+// marked `outside` (the panel folds them away); published pages are not tied to a repo.
+// With no project, nothing is outside.
 export function scopeMade(items, rootsList, slugs) {
   if (!rootsList.length) return items;
   const inside = (file) => rootsList.some((root) => file === root || file.startsWith(root + "/"));
-  return items.filter((x) => (x.kind === "file" ? inside(x.value) : x.kind === "github" ? !slugs.size || slugs.has(x.repo) : true));
+  const mine = (x) => (x.kind === "file" ? inside(x.value) : x.kind === "github" ? !slugs.size || slugs.has(x.repo) : true);
+  return items.map((x) => (mine(x) ? x : { ...x, outside: true }));
 }

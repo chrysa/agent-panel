@@ -3,7 +3,8 @@
 // fresh as the transcript. Nothing here runs a command; services come from services.mjs.
 //
 // Made: Claude pages it published (Artifact tool), files it wrote or edited, GitHub pull
-// requests, issues and releases its commands printed, and branches it pushed.
+// requests, issues and releases a command of its created or changed, and branches it pushed.
+// The GitHub links its other commands printed (a list, a view) were only read: seen(), for Refs.
 // Apps: background commands (running until their task notification), browser tabs it
 // controls (Chrome extension, Playwright), and herdr panes its commands acted on.
 import fs from "node:fs";
@@ -13,6 +14,9 @@ const PAGE_URL = /https:\/\/claude\.ai\/(?:code\/)?artifact\/[A-Za-z0-9_-]+/;
 const GITHUB_URL = /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/(?:(pull|issues)\/(\d+)|releases\/tag\/([\w.%-]+))/g;
 const PUSHED = /^\s*[*+ ]?\s*(?:\[new branch\]|[0-9a-f]{7,}\.\.[0-9a-f]{7,}|\+?\s*[0-9a-f]{7,}\.\.\.[0-9a-f]{7,})\s+\S+\s+->\s+(\S+)/gm;
 const PUSH_TARGET = /^To\s+(?:https:\/\/github\.com\/|(?:ssh:\/\/)?(?:git@)?github\.com[:/])([\w.-]+\/[\w.-]+?)(?:\.git)?\s*$/m;
+// A command that creates or changes something on GitHub (gh's write verbs, a gh api call that
+// is not a GET, git push); the links any other command prints were only read.
+const GH_WRITE = /\bgh\s+(?:pr|issue|release)\s+(?:create|merge|close|reopen|edit|comment|review|ready|delete|upload)\b|\bgh\s+api\b(?![^\n]*(?:-X|--method)[\s=]*GET\b)[^\n]*(?:(?:-X|--method)[\s=]*(?:POST|PATCH|PUT|DELETE)\b|\s(?:-[fF]|--field|--raw-field|--input)[\s=])|\bgit\s+push\b/;
 const BACKGROUND = /^Command (?:running in background with ID: |did not complete within its \S+ timeout and was moved to the background \(ID: )([A-Za-z0-9_-]+)/;
 const OUTPUT_FILE = /Output is being written to: (\S+)/;
 const HERDR_CALL = /\bherdr\s+(pane|tab|workspace|agent|plugin\s+pane)\s+([a-z][\w-]*)([^\n;&|]*)/g;
@@ -37,7 +41,7 @@ export class Outputs {
     this.calls = new Map(); // tool_use id -> { name, input, ts }
     this.pages = new Map(); // url -> { kind: "page", value, title, ts }
     this.files = new Map(); // path -> { kind: "file", value, written, edits, ts }
-    this.github = new Map(); // url or repo@branch -> { kind: "github", value, title, ts }
+    this.github = new Map(); // url or repo@branch -> { kind: "github", value, title, repo, acted, ts }
     this.tasks = new Map(); // id -> { kind: "task", id, value, title, status, ts, ended }
     this.tabs = new Map(); // tab id -> { kind: "browser", value, title, tool, ts }
     this.panes = new Map(); // pane id -> { kind: "pane", value, title, count, ts }
@@ -111,15 +115,18 @@ export class Outputs {
       const output = clean(head.match(OUTPUT_FILE)?.[1] || "");
       this.tasks.set(bg[1], { kind: "task", id: bg[1], value: output, title, status: "running", ts, ended: 0 });
     }
+    const acted = GH_WRITE.test(String(input.command || ""));
     for (const [url, repo, what, number, tag] of text.matchAll(GITHUB_URL)) {
       const label = what === "pull" ? `PR #${number}` : what === "issues" ? `issue #${number}` : `release ${tag}`; // tag as written: never decoded
-      if (!this.github.has(url)) this.github.set(url, { kind: "github", value: url, title: clean(`${repo} ${label}`), repo: clean(repo).toLowerCase(), ts });
+      const known = this.github.get(url);
+      if (!known) this.github.set(url, { kind: "github", value: url, title: clean(`${repo} ${label}`), repo: clean(repo).toLowerCase(), acted, ts });
+      else if (acted && !known.acted) Object.assign(known, { acted, ts }); // read first, then created or changed
     }
     const target = text.match(PUSH_TARGET)?.[1];
     if (target) {
       for (const [, branch] of text.matchAll(PUSHED)) {
         const value = clean(`https://github.com/${target}/tree/${branch}`);
-        this.github.set(value, { kind: "github", value, title: clean(`${target} pushed ${branch}`), repo: clean(target).toLowerCase(), ts });
+        this.github.set(value, { kind: "github", value, title: clean(`${target} pushed ${branch}`), repo: clean(target).toLowerCase(), acted: true, ts });
       }
     }
   }
@@ -154,14 +161,19 @@ export class Outputs {
     this.tabs.set(id, t);
   }
 
-  // Made tab: pages, then GitHub, then files; newest first in each.
+  // Made tab: pages, then what it did on GitHub, then files; newest first in each.
   made() {
     const newest = (a, b) => b.ts - a.ts;
     return [
       ...[...this.pages.values()].sort(newest),
-      ...[...this.github.values()].sort(newest),
+      ...[...this.github.values()].filter((x) => x.acted).sort(newest),
       ...[...this.files.values()].sort(newest),
     ];
+  }
+
+  // Refs tab: the GitHub links its commands printed without changing them, newest first.
+  seen() {
+    return [...this.github.values()].filter((x) => !x.acted).sort((a, b) => b.ts - a.ts);
   }
 
   // Apps tab without services: running tasks first, then browser tabs, panes, finished tasks.
