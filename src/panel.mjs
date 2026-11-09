@@ -12,7 +12,7 @@ import { createSession, paneSession, readConversation } from "./providers.mjs";
 import { viewInClaude } from "./jump.mjs";
 import { fitLine, headerLines, markShown, unmarkShown } from "./header.mjs";
 import { displayPath } from "./refs.mjs";
-import { openingTab } from "./tabs.mjs";
+import { openingTab, tabAt } from "./tabs.mjs";
 import { WHO, c, plain, width, fit, fitMiddle, wrap, dur, ago, firstLine, spread, copyText } from "./text.mjs";
 
 const out = process.stdout;
@@ -49,6 +49,7 @@ let finishedCount = 0;
 let agents = []; // what the Subagents tab lists (finished ones left out while collapsed)
 let screenRows = []; // screen row (1-based) -> item index, for clicks
 let tabHits = []; // [{ from, to, tab }] columns on the tab bar
+let tabRow = 1; // the tab bar's screen row (1-based), below the header lines
 let flash = "", flashUntil = 0;
 let busy = false;
 let detail = null; // { agent, items, stamp, scroll } — a subagent's conversation shown in the panel
@@ -490,6 +491,7 @@ function draw() {
   const barred = new Set(sel);
   const shown = rows.slice(v.scroll, v.scroll + bodyH).map((r, n) => ({ ...r, bar: barred.has(v.scroll + n) }));
   screenRows = [...head.map(() => -1), ...shown.map((r) => r.i)];
+  tabRow = head.length - 1; // head = header lines, the tab bar, its rule
 
   let help;
   if (busy) help = `${c.yellow}switching…`;
@@ -653,9 +655,9 @@ function onKey(key) {
     if (b === "64") wheel(-1);
     else if (b === "65") wheel(1);
     else if (b === "0" && kind === "M") {
-      if (Number(y) === 1) {
-        const hit = tabHits.find((h) => Number(x) >= h.from && Number(x) <= h.to);
-        if (hit) setTab(hit.tab);
+      const clicked = tabAt(Number(x), Number(y), tabRow, tabHits);
+      if (Number(y) === tabRow) {
+        if (clicked) setTab(clicked);
       } else if (screenRows[Number(y) - 1] === "finished") {
         return toggleFinished();
       } else if (/^msg:\d+$/.test(screenRows[Number(y) - 1])) {
