@@ -280,7 +280,7 @@ export class Session {
       if (!e.isMeta && !e.isCompactSummary) this.addPrompt(ts, textOf(content));
       if (Array.isArray(content)) for (const c of content) {
         if (c.type !== "tool_result") continue;
-        this.outputs.onToolResult(c, ts);
+        try { this.outputs.onToolResult(c, ts); } catch {} // fork feature: never breaks the session
         const a = this.toolActions.get(c.tool_use_id);
         if (!a) continue;
         a.result = c.is_error ? "error" : "ok";
@@ -307,7 +307,7 @@ export class Session {
           if (actions.length) this.setTodos(actions, ts);
         }
         if (c.type !== "tool_use") continue;
-        this.outputs.onToolUse(c, ts, this.cwd);
+        try { this.outputs.onToolUse(c, ts, this.cwd); } catch {} // fork feature: never breaks the session
         const m = last?.role === this.assistantRole ? last : this.addMessage(this.assistantRole, ts, "", msgId);
         if (EDIT_TOOLS.has(c.name) && typeof (c.input?.file_path || c.input?.notebook_path) === "string")
           this.edited.add(path.resolve(this.cwd || "/", c.input.file_path || c.input.notebook_path));
@@ -342,7 +342,9 @@ export class Session {
         const ts = Date.parse(e?.timestamp) || Date.now();
         if (id && status && (!this.stops.get(id) || this.stops.get(id).ts <= ts)) this.stops.set(id, { ts, status });
         // Fork: only a real notification, with its own time (request blobs and replies quote old ones).
-        if (id && status && e?.timestamp && (e.type === "user" || e.type === "queue-operation")) this.outputs.onNotification(id, status, ts);
+        if (id && status && e?.timestamp && (e.type === "user" || e.type === "queue-operation")) {
+          try { this.outputs.onNotification(id, status, ts); } catch {}
+        }
       } else if (line.includes('"tool_result"') && !line.includes("Async agent launched")) {
         const e = parse(line);
         const ts = Date.parse(e?.timestamp) || Date.now();

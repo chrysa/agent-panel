@@ -24,6 +24,8 @@ const PLAYWRIGHT = /^mcp__(?:plugin_playwright_)?playwright__/;
 const STOP_STATUS = { completed: "done", stopped: "killed" };
 const QUIET_MS = 30 * 60 * 1000; // a running task whose output has not moved for this long shows as stalled
 
+// Text from transcripts reaches the terminal: no control character (C0, DEL, C1) survives.
+const clean = (s) => String(s ?? "").replace(/[\x00-\x1f\x7f-\x9f]/g, "");
 const fileTime = (file) => { try { return fs.statSync(file).mtimeMs; } catch { return 0; } };
 
 export const textOfResult = (content) =>
@@ -97,7 +99,7 @@ export class Outputs {
     const url = text.match(PAGE_URL)?.[0];
     if (!url || !/^Published\b/.test(text.trim())) return; // read, list, open...: not made here
     const file = typeof input.file_path === "string" ? input.file_path : "";
-    const title = (typeof input.description === "string" && input.description) || (file ? path.basename(file) : url);
+    const title = clean((typeof input.description === "string" && input.description) || (file ? path.basename(file) : url));
     this.pages.set(url, { kind: "page", value: url, title, ts });
   }
 
@@ -105,19 +107,19 @@ export class Outputs {
     const head = text.trimStart();
     const bg = head.match(BACKGROUND);
     if (bg) {
-      const title = String(input.description || input.command || "command").split("\n")[0];
-      const output = head.match(OUTPUT_FILE)?.[1] || "";
+      const title = clean(String(input.description || input.command || "command").split("\n")[0]);
+      const output = clean(head.match(OUTPUT_FILE)?.[1] || "");
       this.tasks.set(bg[1], { kind: "task", id: bg[1], value: output, title, status: "running", ts, ended: 0 });
     }
     for (const [url, repo, what, number, tag] of text.matchAll(GITHUB_URL)) {
-      const label = what === "pull" ? `PR #${number}` : what === "issues" ? `issue #${number}` : `release ${decodeURIComponent(tag)}`;
-      if (!this.github.has(url)) this.github.set(url, { kind: "github", value: url, title: `${repo} ${label}`, ts });
+      const label = what === "pull" ? `PR #${number}` : what === "issues" ? `issue #${number}` : `release ${tag}`; // tag as written: never decoded
+      if (!this.github.has(url)) this.github.set(url, { kind: "github", value: url, title: clean(`${repo} ${label}`), ts });
     }
     const target = text.match(PUSH_TARGET)?.[1];
     if (target) {
       for (const [, branch] of text.matchAll(PUSHED)) {
-        const value = `https://github.com/${target}/tree/${branch}`;
-        this.github.set(value, { kind: "github", value, title: `${target} pushed ${branch}`, ts });
+        const value = clean(`https://github.com/${target}/tree/${branch}`);
+        this.github.set(value, { kind: "github", value, title: clean(`${target} pushed ${branch}`), ts });
       }
     }
   }
@@ -143,6 +145,8 @@ export class Outputs {
   }
 
   seeTab(id, url, title, tool, ts) {
+    url = clean(url);
+    title = clean(title);
     const t = this.tabs.get(id) || { kind: "browser", value: url, title: "", tool, ts };
     t.value = url;
     if (title && title !== url) t.title = title;

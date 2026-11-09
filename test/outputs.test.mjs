@@ -95,3 +95,14 @@ test("a running task whose output has not moved for 30 min shows as stalled", ()
   assert.equal(o.apps(1000 + minutes(40), () => 0).find((x) => x.id === "b2").status, "stalled");
   assert.equal(o.apps(1000 + minutes(40), () => 1000 + minutes(35)).find((x) => x.id === "b2").status, "running"); // output moved
 });
+
+test("control characters from transcripts never reach the terminal; tags are not decoded", () => {
+  const o = new Outputs();
+  use(o, "n", "mcp__claude-in-chrome__navigate", { url: "http://x/" });
+  result(o, "n", '• tabId 7: "Evil\x1b]0;pwned\x07 tab" ("http://x/\x1b[2J")');
+  use(o, "b", "Bash", { command: "gh release create", description: "Ship\x1b[31m it" });
+  result(o, "b", "Command running in background with ID: z1. Output is being written to: /tmp/z1.output\nhttps://github.com/a/b/releases/tag/v1%E0%A4%A");
+  const all = [...o.apps(), ...o.made()];
+  assert.equal(all.some((x) => /[\x00-\x1f\x7f-\x9f]/.test(`${x.title}${x.value}`)), false);
+  assert.ok(o.made().some((x) => x.title === "a/b release v1%E0%A4%A"));
+});
