@@ -16,17 +16,20 @@
   [herdr-plugin.toml](herdr-plugin.toml))
 - **Lifecycle:** shipped upstream (0.4.2); this repository is a fork kept in sync by a weekly
   pull request ([upstream-sync.yml](.github/workflows/upstream-sync.yml)). Fork additions:
-  [header.mjs](src/header.mjs) and the `shown/<pane id>` marker.
+  [header.mjs](src/header.mjs), the `shown/<pane id>` marker, the *Made* and *Apps* tabs
+  ([outputs.mjs](src/outputs.mjs), [services.mjs](src/services.mjs)) and file watching
+  for real-time redraws (owner request 2026-11-09).
 - **Detailed specs:** none; user documentation in [README.md](README.md).
 
 ## 2. Users, devices and priority tasks
 
 | User | Context and device | Priority tasks (three at most) |
 | --- | --- | --- |
-| Developer running Claude Code or Codex in herdr | Linux or macOS terminal, panel beside the agent all day | follow subagents and their progress · find a message or a file/URL the agent mentioned · keep track of what the agent asked the user to do |
+| Developer running Claude Code or Codex in herdr | Linux or macOS terminal, panel beside the agent all day | follow subagents and their progress · find a message, a file/URL or something the agent made · keep track of what the agent asked the user to do and of what it runs |
 
 Primary action per tab: *Subagents* — open the running subagent; *Messages* — read one in full;
-*Refs* — open the reference; *To do* — check an item off.
+*Refs* — open the reference; *To do* — check an item off; *Made* — open what it made;
+*Apps* — open a service, an output, a browser tab, or focus a pane.
 
 ## 3. Journeys and navigation
 
@@ -44,7 +47,15 @@ Primary action per tab: *Subagents* — open the running subagent; *Messages* �
 - **J4 — Header (fork):** an executable named in `header-command` runs every 3 s with
   `<cwd> <provider> <session id> <agent pane id>`; up to six lines are shown above the tab bar,
   colours kept, other control sequences dropped. **[implemented]** ([header.mjs](src/header.mjs))
-- **Information architecture:** four tabs (`←`/`→`, `Tab`, `1`–`4`, click); a footer names the
+- **J5 — What it made (fork):** *Made* lists Claude pages published with the Artifact tool,
+  GitHub PRs, issues, releases and pushed branches from its command output, and files it
+  wrote (`✚`) or edited (`✎`) → Enter opens. **[implemented]** ([outputs.mjs](src/outputs.mjs))
+- **J6 — What it runs (fork):** *Apps* lists the project's services (`services-command`,
+  every 3 s), background commands (running until their task notification, `◌` after 30 min
+  without output), browser tabs it drives (Chrome extension's live tab list, Playwright
+  navigations) and herdr panes its commands acted on → Enter opens or focuses.
+  **[implemented]** ([outputs.mjs](src/outputs.mjs), [services.mjs](src/services.mjs))
+- **Information architecture:** six tabs (`←`/`→`, `Tab`, `1`–`6`, click); a footer names the
   keys of the current tab; `q` closes the panel in this tab only, the *show / hide* action brings
   it back. Key table: [README.md](README.md).
 - **Density:** compact — a message uses up to three lines, the *Finished* section folds (`f`).
@@ -64,6 +75,7 @@ carries a cyan bar in the margin. **[implemented]** ([text.mjs](src/text.mjs))
 | Layout | `SIDE_RATIO` in [lib.mjs](src/lib.mjs); pane sizes in [herdr-plugin.toml](herdr-plugin.toml) | agent keeps 78 % of the tab |
 | Text fitting | `fit`, `fitMiddle`, `wrap`, `charWidth` in [text.mjs](src/text.mjs) | cut with `…`; paths keep their end; wide characters count double |
 | Header (fork) | `EVERY_MS`, `MAX_LINES` in [header.mjs](src/header.mjs) | 3 s, six lines; colour only when the line fits |
+| Made / Apps (fork) | `ITEM_ICON`, `SECTION` in [panel.mjs](src/panel.mjs); `QUIET_MS` in [outputs.mjs](src/outputs.mjs) | one glyph per kind, a dim section header per kind; services plain text only |
 | Motion | none | terminal output does not animate |
 
 - **Shared contract:** `contract.css` and `@chrysa/ui` do not apply to a terminal surface.
@@ -78,15 +90,16 @@ carries a cyan bar in the margin. **[implemented]** ([text.mjs](src/text.mjs))
   | State | Where it appears | Behaviour |
   | --- | --- | --- |
   | Loading | panel, header | no loading text; the header stays empty until its first run |
-  | Empty | every tab | `No messages yet`, `No subagents in this session`, `None in the last 30 min — a shows all`, `The agent hasn't mentioned any URLs or files yet`, `No supported agent session in this tab` |
+  | Empty | every tab | `No messages yet`, `No subagents in this session`, `None in the last 30 min — a shows all`, `The agent hasn't mentioned any URLs or files yet`, `Nothing published, pushed or written yet`, `No services, background commands, browser tabs or panes yet`, `Not tracked for this agent` (Codex, Made), `No supported agent session in this tab` |
   | Error | refs, header | missing files dimmed with `?`; a failing header command hides the header without a message |
   | Offline / backend unreachable | panel | data is local; when the agent quits, the panel closes after 5 s |
   | Stale data | subagents, to do | `◌` stalled after 5 min of silence; the To-do header shows the list's age |
   | Reconnect | panel | after a herdr restart, dead panels are closed and the panel docks again |
 
-- **Real-time:** data refreshes every second. The cursor stays on its item; a wheel-scrolled
-  view stays put, or sticks to the bottom when it was there. **[implemented]**
-  ([panel.mjs](src/panel.mjs))
+- **Real-time:** the transcript and the subagents folder are watched: a new line redraws within
+  ~40 ms; the one-second timer stays as a fallback; services every 3 s. The cursor stays on its
+  item; a wheel-scrolled view stays put, or sticks to the bottom when it was there.
+  **[implemented]** ([panel.mjs](src/panel.mjs))
 - **Motion:** none (FE-053, terminal: no animation).
 
 ## 7. Responsive and support conventions
@@ -124,6 +137,7 @@ No fonts or icons are shipped; glyphs are Unicode characters.
   | Date | Change | Checks run (tool, sizes, modes) | Result | Not run, and why |
   | --- | --- | --- | --- | --- |
   | 2026-11-08 | contract written from the code | source review | gaps listed in §11 | no terminal run: documentation-only change |
+  | 2026-11-09 | Made and Apps tabs, file watching (fork) | `node --test` (24); panel run outside herdr (`SA_SESSION`, tmux 70×40) on a real session: Made 62 items, Apps services/background/panes | sections, glyphs and empty states as specified | not run inside herdr before merge (the installed plugin is pinned) |
 
 ## 11. Open choices, known gaps and maintenance
 
