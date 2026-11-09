@@ -16,9 +16,10 @@
   [herdr-plugin.toml](herdr-plugin.toml))
 - **Lifecycle:** shipped upstream (0.4.2); this repository is a fork kept in sync by a weekly
   pull request ([upstream-sync.yml](.github/workflows/upstream-sync.yml)). Fork additions:
-  [header.mjs](src/header.mjs), the `shown/<pane id>` marker, the *Made* and *Apps* tabs
-  ([outputs.mjs](src/outputs.mjs), [services.mjs](src/services.mjs)) and file watching
-  for real-time redraws (owner request 2026-11-09).
+  [header.mjs](src/header.mjs), the `shown/<pane id>` marker, the *Made*, *Apps* and *Repo*
+  tabs ([outputs.mjs](src/outputs.mjs), [services.mjs](src/services.mjs),
+  [project.mjs](src/project.mjs)), file watching for real-time redraws, and the scope to the
+  agent's project (owner requests 2026-11-09).
 - **Detailed specs:** none; user documentation in [README.md](README.md).
 
 ## 2. Users, devices and priority tasks
@@ -55,7 +56,15 @@ Primary action per tab: *Subagents* — open the running subagent; *Messages* �
   without output), browser tabs it drives (Chrome extension's live tab list, Playwright
   navigations) and herdr panes its commands acted on → Enter opens or focuses.
   **[implemented]** ([outputs.mjs](src/outputs.mjs), [services.mjs](src/services.mjs))
-- **Information architecture:** six tabs (`←`/`→`, `Tab`, `1`–`6`, click); a footer names the
+- **J7 — The project on GitHub (fork):** the project is the agent's git work tree, else the
+  repos the session edited (3 at most). *Repo* sums each up: open pull requests (CI `✓ ✗ ●`,
+  review, author, age; `gh pr list` every 30 s through the user's `gh`), worktrees (branch,
+  `~` changed files, `↑`/`↓`, the branch's PR; `git` every 5 s) and branches without a PR
+  (not the default or a long-lived branch, nor one whose PR was merged or closed; 10 shown,
+  Space on the last lists all) → Enter opens the PR, the worktree's folder or the pushed
+  branch. *Made* is scoped to the same project: its files (grouped by repo when several) and
+  GitHub items of its repos; published pages stay. **[implemented]** ([project.mjs](src/project.mjs))
+- **Information architecture:** seven tabs (`←`/`→`, `Tab`, `1`–`7`, click); a footer names the
   keys of the current tab; `q` closes the panel in this tab only, the *show / hide* action brings
   it back. Key table: [README.md](README.md).
 - **Density:** compact — a message uses up to three lines, the *Finished* section folds (`f`).
@@ -80,6 +89,7 @@ carries a cyan bar in the margin. **[implemented]** ([text.mjs](src/text.mjs))
 | Layout | `SIDE_RATIO` in [lib.mjs](src/lib.mjs); pane sizes in [herdr-plugin.toml](herdr-plugin.toml) | agent keeps 78 % of the tab |
 | Text fitting | `fit`, `fitMiddle`, `wrap`, `charWidth` in [text.mjs](src/text.mjs) | cut with `…`; paths keep their end; wide characters count double |
 | Header (fork) | `EVERY_MS`, `MAX_LINES` in [header.mjs](src/header.mjs) | 3 s, six lines; colour only when the line fits |
+| Repo (fork) | `PR_EVERY_MS`, `GIT_EVERY_MS`, `MAX_REPOS`, `LONG_LIVED` in [project.mjs](src/project.mjs); `MAX_BRANCH_ROWS`, `CI_GLYPH` in [panel.mjs](src/panel.mjs) | 30 s GitHub, 5 s git, 3 repos, 10 branches shown |
 | Pictograms (fork) | `GLYPHS`, `BY_EXT` in [icons.mjs](src/icons.mjs) | Nerd Font v3, one glyph + a space, off unless `icons` says `nerd` |
 | Made / Apps (fork) | `ITEM_ICON`, `SECTION` in [panel.mjs](src/panel.mjs); `QUIET_MS` in [outputs.mjs](src/outputs.mjs) | one glyph per kind, a dim section header per kind; services plain text only |
 | Motion | none | terminal output does not animate |
@@ -96,7 +106,7 @@ carries a cyan bar in the margin. **[implemented]** ([text.mjs](src/text.mjs))
   | State | Where it appears | Behaviour |
   | --- | --- | --- |
   | Loading | panel, header | no loading text; the header stays empty until its first run |
-  | Empty | every tab | `No messages yet`, `No subagents in this session`, `None in the last 30 min — a shows all`, `The agent hasn't mentioned any URLs or files yet`, `Nothing published, pushed or written yet`, `No services, background commands, browser tabs or panes yet`, `Not tracked for this agent` (Codex, Made), `No supported agent session in this tab` |
+  | Empty | every tab | `No messages yet`, `No subagents in this session`, `None in the last 30 min — a shows all`, `The agent hasn't mentioned any URLs or files yet`, `Nothing published, pushed or written yet`, `No services, background commands, browser tabs or panes yet`, `No git repository for this agent yet`, `Not tracked for this agent` (Codex, Made), `No supported agent session in this tab` |
   | Error | refs, header | missing files dimmed with `?`; a failing header command hides the header without a message |
   | Offline / backend unreachable | panel | data is local; when the agent quits, the panel closes after 5 s |
   | Stale data | subagents, to do | `◌` stalled after 5 min of silence; the To-do header shows the list's age |
@@ -144,6 +154,7 @@ are code points of the user's own Nerd Font.
   | Date | Change | Checks run (tool, sizes, modes) | Result | Not run, and why |
   | --- | --- | --- | --- | --- |
   | 2026-11-08 | contract written from the code | source review | gaps listed in §11 | no terminal run: documentation-only change |
+  | 2026-11-10 | Repo tab, Made scoped to the project (fork) | `node --test` (33); panel outside herdr (tmux 76×40) with the agent in herdr-cockpit (1 repo), in padam-av (Optiways, 21 PRs through the scope's account) and in a folder of repos (3 repos, files grouped) | sections, CI and review marks, branch filtering as specified | not run inside herdr before merge |
   | 2026-11-09 | Nerd Font pictograms (fork, opt-in) | `node --test` (27); panel outside herdr, tmux 72×26, `AGENT_PANEL_ICONS=nerd` and `plain` | nerd: pictogram tab bar, kind and file-type glyphs; plain: unchanged | not run inside herdr before merge |
   | 2026-11-09 | Made and Apps tabs, file watching (fork) | `node --test` (24); panel run outside herdr (`SA_SESSION`, tmux 70×40) on a real session: Made 62 items, Apps services/background/panes | sections, glyphs and empty states as specified | not run inside herdr before merge (the installed plugin is pinned) |
 

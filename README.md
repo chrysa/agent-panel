@@ -88,7 +88,7 @@ or cleared after that):
 
 | Key | Action |
 | --- | --- |
-| `←` / `→`, `Tab`, `1`–`6`, click | Switch tabs |
+| `←` / `→`, `Tab`, `1`–`7`, click | Switch tabs |
 | `j` / `k`, wheel | Move |
 | `g` / `G` | Jump to the first or last item |
 | Enter / click | Messages: show in full (popup) · Subagents: open in Claude · Refs: open |
@@ -96,7 +96,7 @@ or cleared after that):
 | `v` | Subagents: read its conversation in the panel (Esc goes back, `z` zooms) |
 | `a` | Subagents: all of them, or just the last 30 minutes |
 | `m` | Subagents: back to main |
-| `y` | Refs, Made, Apps: copy the URL or path · To do: copy the request |
+| `y` | Refs, Made, Apps, Repo: copy the URL, path or branch · To do: copy the request |
 | `x` | To do: check off or reopen |
 | `f` / click the header | Subagents: fold or unfold the Finished section |
 | `q` | Close it in this tab; it still follows you to other Claude tabs. The **agent-panel: show / hide** action brings it back here |
@@ -181,6 +181,27 @@ section is empty.
 
 The panel redraws as soon as the agent's transcript or its subagents folder changes
 (file watching); the one-second timer stays as a fallback.
+
+## Repo, and the project scope (chrysa fork)
+
+The panel works on the agent's **project**: the git work tree of its folder, or, when that
+folder holds many repos, the repos the session edited (3 at most). **Made** keeps only that
+project's files (one section per repo when several) and GitHub items; published pages stay.
+
+**Repo** sums each project repo up:
+
+- **Pull requests**: every open PR of the repo, with CI (`✓` passed, `✗` failed, `●` running,
+  `·` none), review state, author and age; from `gh pr list` every 30 s (your `gh`, so your
+  account for that repo).
+- **Worktrees**: each worktree's branch, uncommitted changes (`~N`), commits ahead/behind
+  (`↑`/`↓`) and its PR number; from `git` every 5 s.
+- **Branches without PR**: local or pushed branches with no open PR, leaving out the default
+  branch, long-lived ones (`main`, `master`, `develop`, `staging`, `production`) and branches
+  whose PR was merged or closed. 10 shown; Space on the last one lists them all.
+
+Enter opens the PR, the worktree's folder, or a pushed branch on GitHub (a local branch: `y`
+copies its name). Without `gh` or network the header says `GitHub unavailable` and git data
+stays.
 
 ## Pictograms (chrysa fork)
 

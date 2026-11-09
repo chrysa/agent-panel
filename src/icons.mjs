@@ -21,11 +21,11 @@ export const MODE = iconMode();
 // Nerd Fonts v3 code points (Font Awesome, Octicons, Devicons, Seti, Material Design).
 export const GLYPHS = {
   // tabs
-  subagents: "\u{f06a9}", messages: "", refs: "", todo: "", made: "", apps: "",
+  subagents: "\u{f06a9}", messages: "", refs: "", todo: "", made: "", apps: "", repo: "\uf09b",
   // Made / Apps / Refs kinds
   page: "", url: "", pr: "", issue: "", release: "", push: "",
   file: "", folder: "", service: "", task: "", browser: "", playwright: "",
-  pane: "",
+  pane: "", repository: "\uf401", worktree: "\uf126", branch: "\uf418",
   // sections
   github: "", files: "", finished: "",
 };

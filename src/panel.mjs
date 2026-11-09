@@ -5,7 +5,9 @@
 //   To do     — what Claude says you still have to do (its latest ACTION: list); x checks one off, Enter/click shows where it asked
 //   Made      — (fork) pages it published, GitHub PRs/releases/pushes, files it wrote; Enter/click opens, y copies
 //   Apps      — (fork) project services, background commands, browser tabs and herdr panes it drives; Enter/click opens
-// Tab, ←/→, 1–6 or a click on the tab bar switches tabs. j/k move, q closes the panel in this tab.
+//   Repo      — (fork) the project's open pull requests, worktrees and branches without a PR; Enter/click opens
+// Made is scoped to the project (the agent's git work tree, else the repos the session touched).
+// Tab, ←/→, 1–7 or a click on the tab bar switches tabs. j/k move, q closes the panel in this tab.
 // The transcript is watched: a new line redraws at once (the 1 s timer is the fallback).
 import fs from "node:fs";
 import path from "node:path";
@@ -18,6 +20,7 @@ import { displayPath } from "./refs.mjs";
 import { openingTab, tabAt } from "./tabs.mjs";
 import { serviceItems } from "./services.mjs";
 import { MODE, fileIcon, githubIcon, icon } from "./icons.mjs";
+import { ProjectSummaries, projectRoots, scopeMade } from "./project.mjs";
 import { WHO, c, plain, width, fit, fitMiddle, wrap, dur, ago, firstLine, spread, copyText } from "./text.mjs";
 
 const out = process.stdout;
@@ -33,13 +36,16 @@ const ORDER = { running: 0, stalled: 1, failed: 2, killed: 3, done: 4 };
 
 let tracked = null; // { paneId, sessionId, cwd, status }
 let session = null;
-const TABS = ["subagents", "messages", "refs", "todo", "made", "apps"];
+const TABS = ["subagents", "messages", "refs", "todo", "made", "apps", "repo"];
 const savedTab = () => { try { const t = fs.readFileSync(TAB_FILE, "utf8").trim(); return TABS.includes(t) ? t : TABS[0]; } catch { return TABS[0]; } };
 let tab = savedTab(); // the shown tab; openingTab() may differ from the saved one for a new session
 let refs = []; // what the Refs tab lists: by the Claude message that mentions them, newest first
 let todos = []; // what the To do tab lists: Claude's latest list, in its order, the ones you checked off last
 let made = []; // fork: what the Made tab lists (Outputs.made)
 let apps = []; // fork: what the Apps tab lists (services, then Outputs.apps)
+let repoItems = []; // fork: what the Repo tab lists (pull requests, worktrees, branches without a PR, per repo)
+let projectRootsNow = []; // fork: the project's work trees
+const projects = new ProjectSummaries();
 // Checked-off to-dos: { [sessionId]: [todo id] }.
 const DONE_FILE = path.join(STATE_DIR, "todo-done.json");
 const readDone = () => { try { return JSON.parse(fs.readFileSync(DONE_FILE, "utf8")); } catch { return {}; } };
@@ -50,6 +56,7 @@ const views = {
   todo: { cursor: 0, scroll: 0, expanded: new Set() },
   made: { cursor: 0, scroll: 0, expanded: new Set() },
   apps: { cursor: 0, scroll: 0, expanded: new Set() },
+  repo: { cursor: 0, scroll: 0, expanded: new Set() },
 };
 let showAll = false;
 const FINISHED_FILE = path.join(STATE_DIR, "finished-collapsed");
@@ -108,6 +115,7 @@ function pickAgent() {
     views.todo = { cursor: 0, scroll: 0, expanded: new Set() };
     views.made = { cursor: 0, scroll: 0, expanded: new Set() };
     views.apps = { cursor: 0, scroll: 0, expanded: new Set() };
+    views.repo = { cursor: 0, scroll: 0, expanded: new Set() };
     refresh();
     tab = openingTab(savedTab(), { subagents: agents.length + finishedCount, todos: todos.filter((t) => !t.done).length });
   }
@@ -144,11 +152,25 @@ function watchSession() {
 }
 
 function refresh() {
-  if (!session) { agents = []; refs = []; todos = []; made = []; apps = []; return; }
+  if (!session) { agents = []; refs = []; todos = []; made = []; apps = []; repoItems = []; return; }
   session.refresh();
   watchSession();
   const outs = session.outputs;
-  const nextMade = outs ? outs.made() : [];
+  // Fork: the project, its summaries, and Made scoped to it (grouped by repo when several).
+  projectRootsNow = projectRoots(tracked?.cwd || session.cwd || "", outs ? [...outs.files.values()] : []);
+  const summaries = projects.summaries(projectRootsNow, render);
+  const slugs = new Set(summaries.map((s) => s.slug).filter(Boolean));
+  const several = projectRootsNow.length > 1;
+  const rootOf = (file) => projectRootsNow.find((root) => file === root || file.startsWith(root + "/"));
+  const order = (x) => (x.kind === "file" && several ? projectRootsNow.indexOf(rootOf(x.value)) : -1);
+  const nextMade = scopeMade(outs ? outs.made() : [], projectRootsNow, slugs)
+    .map((x) => (several && x.kind === "file" ? { ...x, group: path.basename(rootOf(x.value) || "") } : x))
+    .map((x, n) => ({ x, n })) // files of one repo together (in the project's order), newest first inside
+    .sort((a, b) => (a.x.kind === "file" && b.x.kind === "file" ? order(a.x) - order(b.x) || a.n - b.n : a.n - b.n))
+    .map(({ x }) => x);
+  const nextRepo = repoItemsOf(summaries);
+  keepCursor(views.repo, repoItems, nextRepo, itemKey);
+  repoItems = nextRepo;
   keepCursor(views.made, made, nextMade, itemKey);
   made = nextMade;
   const nextApps = [...serviceItems(tracked, session, render), ...(outs ? outs.apps() : [])];
@@ -178,7 +200,7 @@ function refresh() {
   views.subagents.cursor = Math.min(views.subagents.cursor, Math.max(0, agents.length - 1));
 }
 
-const LISTS = { refs: () => refs, todo: () => todos, made: () => made, apps: () => apps };
+const LISTS = { refs: () => refs, todo: () => todos, made: () => made, apps: () => apps, repo: () => repoItems };
 const items = () => (tab === "messages" ? session?.messages || [] : LISTS[tab] ? LISTS[tab]() : agents);
 
 // ---------- views ----------
@@ -392,12 +414,14 @@ function itemRows(list, view, w, now, empty) {
   let section = null;
   list.forEach((x, i) => {
     const live = (y) => y.status === "running" || y.status === "stalled";
-    const group = x.kind === "task" ? (live(x) ? "task" : "task-done") : x.kind;
+    const groupOf = (y) => (y.kind === "task" ? (live(y) ? "task" : "task-done") : y.group ? `${y.kind}:${y.group}` : y.kind);
+    const group = groupOf(x);
     if (group !== section) {
       if (rows.length) rows.push({ text: "", i: -1 });
-      const n = list.filter((y) => (y.kind === "task" ? (live(y) ? "task" : "task-done") : y.kind) === group).length;
+      const n = list.filter((y) => groupOf(y) === group).length;
       const pict = group === "task-done" ? icon("finished") : icon(SECTION_ICON[x.kind]);
-      rows.push({ text: `${c.dim}${pict}${group === "task-done" ? "FINISHED" : SECTION[x.kind]} · ${n}${c.reset}`, i: -1 });
+      const label = group === "task-done" ? "FINISHED" : `${SECTION[x.kind]}${x.group ? ` · ${x.group}` : ""}`;
+      rows.push({ text: `${c.dim}${pict}${label} · ${n}${c.reset}`, i: -1 });
       section = group;
     }
     const pict = kindIcon(x);
@@ -421,6 +445,78 @@ function itemRows(list, view, w, now, empty) {
   if (!list.length) rows.push({ text: `${c.dim}  ${session ? empty : "No supported agent session in this tab"}${c.reset}`, i: -1 });
   return rows;
 }
+// Fork: the Repo tab's items, one list for every repo of the project.
+function repoItemsOf(summaries) {
+  const items = [];
+  const seen = new Set(); // a repo reached through its main checkout and a worktree is summed up once
+  for (const s of summaries) {
+    if (s.slug && seen.has(s.slug)) continue;
+    if (s.slug) seen.add(s.slug);
+    const repo = s.slug || path.basename(s.root);
+    items.push({ kind: "repo-head", repo, root: s.root, title: repo, value: s.slug ? `https://github.com/${s.slug}` : s.root,
+      ghError: s.ghError, loading: s.loading, counts: [s.pulls.length, s.worktrees.length, s.branches.length], ts: 0 });
+    for (const p of s.pulls) items.push({ kind: "pull", repo, root: s.root, ...p, value: p.url, title: `#${p.number} ${p.title}` });
+    for (const w of s.worktrees) items.push({ kind: "worktree", repo, root: s.root, ...w, value: w.path, title: w.branch || "(detached)", ts: 0 });
+    for (const b of s.branches) {
+      items.push({ kind: "branch", repo, root: s.root, ...b, title: b.name, value: b.pushed && s.slug ? `https://github.com/${s.slug}/tree/${encodeURI(b.name)}` : "" });
+    }
+  }
+  return items;
+}
+
+const MAX_BRANCH_ROWS = 10;
+const CI_GLYPH = { pass: `${c.green}✓${c.reset}`, fail: `${c.red}✗${c.reset}`, pending: `${c.yellow}●${c.reset}`, "": `${c.dim}·${c.reset}` };
+const REVIEW_MARK = { APPROVED: `${c.green}approved${c.reset}`, CHANGES_REQUESTED: `${c.red}changes${c.reset}`, REVIEW_REQUIRED: `${c.dim}review${c.reset}` };
+const REPO_SECTION = { pull: ["pr", "PULL REQUESTS"], worktree: ["worktree", "WORKTREES"], branch: ["branch", "BRANCHES WITHOUT PR"] };
+
+function repoRows(w, now) {
+  const v = views.repo;
+  const rows = [];
+  let section = null;
+  repoItems.forEach((x, i) => {
+    if (x.kind === "repo-head") {
+      if (rows.length) rows.push({ text: "", i: -1 });
+      const state = x.loading ? `${c.dim}reading…${c.reset}` : x.ghError ? `${c.red}GitHub unavailable${c.reset}` : "";
+      rows.push({ text: spread(`${c.bold}${icon("repository")}${fit(x.title, w - 22)}${c.reset}`, state, w), i });
+      section = null;
+      return;
+    }
+    // At most MAX_BRANCH_ROWS branches per repo, then "+N more" (Space on the last one lists all).
+    if (x.kind === "branch") {
+      const mine = repoItems.filter((y) => y.repo === x.repo && y.kind === "branch");
+      const at = mine.indexOf(x);
+      if (at >= MAX_BRANCH_ROWS && !v.expanded.has(`more:${x.repo}`)) {
+        if (at === MAX_BRANCH_ROWS) rows.push({ text: `   ${c.dim}+${mine.length - MAX_BRANCH_ROWS} more · Space on the last one shows them${c.reset}`, i: -1 });
+        return;
+      }
+    }
+    if (x.kind !== section) {
+      const n = repoItems.filter((y) => y.repo === x.repo && y.kind === x.kind).length;
+      rows.push({ text: `${c.dim}${icon(REPO_SECTION[x.kind][0])}${REPO_SECTION[x.kind][1]} · ${n}${c.reset}`, i: -1 });
+      section = x.kind;
+    }
+    let left, right;
+    if (x.kind === "pull") {
+      const review = REVIEW_MARK[x.review] ? ` ${REVIEW_MARK[x.review]}` : "";
+      right = `${c.dim}${x.author ? x.author + " " : ""}${ago(now - x.ts)}${c.reset}`;
+      left = `  ${CI_GLYPH[x.ci]} ${x.draft ? c.dim : ""}${fit(x.title, Math.max(8, w - width(right) - width(review) - 6))}${c.reset}${review}`;
+    } else if (x.kind === "worktree") {
+      const marks = [x.changed ? `${c.yellow}~${x.changed}${c.reset}` : "", x.ahead ? `${c.cyan}↑${x.ahead}${c.reset}` : "",
+        x.behind ? `${c.magenta}↓${x.behind}${c.reset}` : "", x.pull ? `${c.dim}#${x.pull.number}${c.reset}` : ""].filter(Boolean).join(" ");
+      const where = x.path === x.root ? "." : path.basename(x.path);
+      right = `${c.dim}${fitMiddle(where, Math.max(6, Math.floor(w / 3)))}${c.reset}`;
+      left = `  ${x.changed ? `${c.yellow}●${c.reset}` : `${c.green}✓${c.reset}`} ${icon("worktree")}${fit(x.title, Math.max(8, w - width(right) - width(marks) - 8))} ${marks}`;
+    } else {
+      right = `${c.dim}${x.pushed ? "pushed" : "local"} ${ago(now - x.ts)}${c.reset}`;
+      left = `  ${x.pushed ? `${c.cyan}↑${c.reset}` : `${c.dim}○${c.reset}`} ${icon("branch")}${fit(x.title, Math.max(8, w - width(right) - 7))}`;
+    }
+    rows.push({ text: spread(left, right, w), i });
+    if (v.expanded.has(itemKey(x)) && x.value) for (const line of wrap(x.value, w - 6).slice(0, 3)) rows.push({ text: `      ${c.dim}${line}${c.reset}`, i });
+  });
+  if (!repoItems.length) rows.push({ text: `${c.dim}  ${session ? "No git repository for this agent yet" : "No supported agent session in this tab"}${c.reset}`, i: -1 });
+  return rows;
+}
+
 const madeRows = (w, now) => itemRows(made, views.made, w, now, session?.outputs ? "Nothing published, pushed or written yet" : "Not tracked for this agent");
 const appsRows = (w, now) => itemRows(apps, views.apps, w, now, "No services, background commands, browser tabs or panes yet");
 
@@ -435,8 +531,11 @@ function openItem(x) {
     flashUntil = Date.now() + 3000;
     return render();
   }
-  if (!x.value) { flash = `${c.dim}Nothing to open`; flashUntil = Date.now() + 2000; return render(); }
-  openRef({ kind: x.kind === "file" || x.kind === "task" ? "file" : "url", value: x.value, line: 0 });
+  if (!x.value) {
+    if (x.kind === "branch") return copyRef({ value: x.title }); // a local branch: its name
+    flash = `${c.dim}Nothing to open`; flashUntil = Date.now() + 2000; return render();
+  }
+  openRef({ kind: x.kind === "file" || x.kind === "task" || x.kind === "worktree" ? "file" : "url", value: x.value, line: 0 });
 }
 
 function toggleTodo(t) {
@@ -564,11 +663,16 @@ function draw() {
     todo: (() => { const n = todos.filter((t) => !t.done).length; return n ? `${c.yellow}○${n}${c.reset}` : ""; })(),
     made: made.length ? `${c.dim}${made.length}${c.reset}` : "",
     apps: (() => { const n = apps.filter((x) => x.kind === "task" && x.status === "running").length; return n ? `${c.yellow}●${n}${c.reset}` : apps.length ? `${c.dim}${apps.length}${c.reset}` : ""; })(),
+    repo: (() => {
+      const failing = repoItems.filter((x) => x.kind === "pull" && x.ci === "fail").length;
+      const pulls = repoItems.filter((x) => x.kind === "pull").length;
+      return failing ? `${c.red}✗${failing}${c.reset}` : pulls ? `${c.dim}${pulls}${c.reset}` : "";
+    })(),
   };
   const names = [
-    { messages: "Messages", subagents: "Subagents", refs: "Refs", todo: "To do", made: "Made", apps: "Apps" },
-    { messages: "Msgs", subagents: "Agents", refs: "Refs", todo: "To do", made: "Made", apps: "Apps" },
-    { messages: "M", subagents: "A", refs: "R", todo: "D", made: "O", apps: "P" },
+    { messages: "Messages", subagents: "Subagents", refs: "Refs", todo: "To do", made: "Made", apps: "Apps", repo: "Repo" },
+    { messages: "Msgs", subagents: "Agents", refs: "Refs", todo: "To do", made: "Made", apps: "Apps", repo: "Repo" },
+    { messages: "M", subagents: "A", refs: "R", todo: "D", made: "O", apps: "P", repo: "G" },
   ];
   let bar = "";
   if (MODE === "nerd") { // fork: a pictogram before each name; the narrowest bar keeps only the pictogram
@@ -596,7 +700,7 @@ function draw() {
 
   const v = views[tab];
   const rows = tab === "messages" ? messageRows(w, now) : tab === "refs" ? refRows(w, now) : tab === "todo" ? todoRows(w, now)
-    : tab === "made" ? madeRows(w, now) : tab === "apps" ? appsRows(w, now) : subagentRows(w, now);
+    : tab === "made" ? madeRows(w, now) : tab === "apps" ? appsRows(w, now) : tab === "repo" ? repoRows(w, now) : subagentRows(w, now);
   const bodyH = H - head.length - 1;
   v.maxScroll = Math.max(0, rows.length - bodyH);
   if (v.free) {
@@ -626,7 +730,7 @@ function draw() {
   else if (tab === "messages") help = `${c.dim}click/Enter full message · Space expand · q close`;
   else if (tab === "refs") help = `${c.dim}click/Enter open · y copy · click ● message · q close`;
   else if (tab === "todo") help = `${c.dim}x done · click/Enter message · y copy · q close`;
-  else if (tab === "made" || tab === "apps") help = `${c.dim}click/Enter open · Space details · y copy · q close`;
+  else if (tab === "made" || tab === "apps" || tab === "repo") help = `${c.dim}click/Enter open · Space details · y copy · q close`;
   else help = `${c.dim}${w >= 58 ? `${session?.provider === "codex" ? "click/Enter read" : "click/Enter open in Claude"} · v read here · f finished · a ${showAll ? "recent" : "all"}` : "click open · v read · f finished"}`;
   const footer = width(help) > w ? `${c.dim}${fit(plain(help), w)}` : help;
 
@@ -744,6 +848,7 @@ function activate() { // Enter or click on the current item
   if (tab === "refs") return openRef(refs[v.cursor]);
   if (tab === "made") return openItem(made[v.cursor]);
   if (tab === "apps") return openItem(apps[v.cursor]);
+  if (tab === "repo") return openItem(repoItems[v.cursor]);
   if (tab === "todo") return todos[v.cursor] && popOut(todos[v.cursor].msg);
   if (tab === "messages") return popOut(v.cursor);
   const a = agents[v.cursor];
@@ -804,7 +909,7 @@ function onKey(key) {
   if (key === "q") return quit({ dismiss: true });
   if (key === "\t" || key === "\x1b[C") setTab(TABS[(TABS.indexOf(tab) + 1) % TABS.length]); // Tab, →
   else if (key === "\x1b[D") setTab(TABS[(TABS.indexOf(tab) + TABS.length - 1) % TABS.length]); // ←
-  else if (/^[1-6]$/.test(key)) setTab(TABS[Number(key) - 1]);
+  else if (/^[1-7]$/.test(key)) setTab(TABS[Number(key) - 1]);
   else if (key === "j" || key === "\x1b[B") move(1);
   else if (key === "k" || key === "\x1b[A") move(-1);
   else if (key === "g") move(-Infinity);
@@ -812,14 +917,26 @@ function onKey(key) {
   else if (key === "\r") return activate();
   else if (key === " " || key === "l" || key === "h") {
     const v = views[tab];
+    // Repo tab: Space on the last shown branch of a repo lists them all (and back).
+    const cur = tab === "repo" ? repoItems[v.cursor] : null;
+    if (cur?.kind === "branch") {
+      const mine = repoItems.filter((y) => y.repo === cur.repo && y.kind === "branch");
+      if (mine.indexOf(cur) === MAX_BRANCH_ROWS - 1 || v.expanded.has(`more:${cur.repo}`)) {
+        const k = `more:${cur.repo}`;
+        v.expanded.has(k) ? v.expanded.delete(k) : v.expanded.add(k);
+      }
+    }
     const id = tab === "messages" ? v.cursor : tab === "refs" ? refs[v.cursor]?.value
-      : tab === "made" || tab === "apps" ? (items()[v.cursor] ? itemKey(items()[v.cursor]) : undefined) : agents[v.cursor]?.id;
+      : tab === "made" || tab === "apps" || tab === "repo" ? (items()[v.cursor] ? itemKey(items()[v.cursor]) : undefined) : agents[v.cursor]?.id;
     if (id !== undefined && id !== -1) v.expanded.has(id) ? v.expanded.delete(id) : v.expanded.add(id);
   } else if (key === "m" && tab === "subagents") return openInClaude("main");
   else if (key === "v" && tab === "subagents" && agents[views.subagents.cursor]) openDetail(agents[views.subagents.cursor]);
   else if (key === "a" && tab === "subagents") { showAll = !showAll; refresh(); }
   else if (key === "y" && tab === "refs") return copyRef(refs[views.refs.cursor]);
-  else if (key === "y" && (tab === "made" || tab === "apps") && items()[views[tab].cursor]?.value) return copyRef(items()[views[tab].cursor]);
+  else if (key === "y" && (tab === "made" || tab === "apps" || tab === "repo") && items()[views[tab].cursor]) {
+    const x = items()[views[tab].cursor];
+    return copyRef({ value: x.value || x.title });
+  }
   else if (key === "x" && tab === "todo") return toggleTodo(todos[views.todo.cursor]);
   else if (key === "y" && tab === "todo" && todos[views.todo.cursor]) {
     // A request with a command in it ("Run `herdr server stop`") copies just the command.

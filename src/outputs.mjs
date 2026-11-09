@@ -113,13 +113,13 @@ export class Outputs {
     }
     for (const [url, repo, what, number, tag] of text.matchAll(GITHUB_URL)) {
       const label = what === "pull" ? `PR #${number}` : what === "issues" ? `issue #${number}` : `release ${tag}`; // tag as written: never decoded
-      if (!this.github.has(url)) this.github.set(url, { kind: "github", value: url, title: clean(`${repo} ${label}`), ts });
+      if (!this.github.has(url)) this.github.set(url, { kind: "github", value: url, title: clean(`${repo} ${label}`), repo: clean(repo).toLowerCase(), ts });
     }
     const target = text.match(PUSH_TARGET)?.[1];
     if (target) {
       for (const [, branch] of text.matchAll(PUSHED)) {
         const value = clean(`https://github.com/${target}/tree/${branch}`);
-        this.github.set(value, { kind: "github", value, title: clean(`${target} pushed ${branch}`), ts });
+        this.github.set(value, { kind: "github", value, title: clean(`${target} pushed ${branch}`), repo: clean(target).toLowerCase(), ts });
       }
     }
   }
