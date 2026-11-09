@@ -62,7 +62,12 @@ Primary action per tab: *Subagents* — open the running subagent; *Messages* �
 
 ## 4. Identity
 
-A plain terminal tool owned upstream: no logo or palette. Sender dots identify who wrote a
+A plain terminal tool owned upstream: no logo or palette. Fork option (owner request
+2026-11-09): Nerd Font v3 pictograms, off by default, on with `nerd` in the plugin config's
+`icons` file or `AGENT_PANEL_ICONS=nerd` — one before each tab name (alone when the bar is
+narrow), one per Made/Apps/Refs item (by kind, files by extension) and section header; the
+header and services commands get the same variable. State glyphs stay, so meaning never
+depends on the pictogram. **[implemented]** ([icons.mjs](src/icons.mjs)) Sender dots identify who wrote a
 message (blue *you*, orange *Claude*, green *Codex*), always next to the name. The selected item
 carries a cyan bar in the margin. **[implemented]** ([text.mjs](src/text.mjs))
 
@@ -75,6 +80,7 @@ carries a cyan bar in the margin. **[implemented]** ([text.mjs](src/text.mjs))
 | Layout | `SIDE_RATIO` in [lib.mjs](src/lib.mjs); pane sizes in [herdr-plugin.toml](herdr-plugin.toml) | agent keeps 78 % of the tab |
 | Text fitting | `fit`, `fitMiddle`, `wrap`, `charWidth` in [text.mjs](src/text.mjs) | cut with `…`; paths keep their end; wide characters count double |
 | Header (fork) | `EVERY_MS`, `MAX_LINES` in [header.mjs](src/header.mjs) | 3 s, six lines; colour only when the line fits |
+| Pictograms (fork) | `GLYPHS`, `BY_EXT` in [icons.mjs](src/icons.mjs) | Nerd Font v3, one glyph + a space, off unless `icons` says `nerd` |
 | Made / Apps (fork) | `ITEM_ICON`, `SECTION` in [panel.mjs](src/panel.mjs); `QUIET_MS` in [outputs.mjs](src/outputs.mjs) | one glyph per kind, a dim section header per kind; services plain text only |
 | Motion | none | terminal output does not animate |
 
@@ -124,7 +130,8 @@ footer is cut with `…`. Every mouse action has a key.
 | Demo animation | screen recording (upstream) | upstream maintainer | unknown: no LICENSE file in the repository | README illustration | GIF, 3.7 MB | [docs/demo.gif](docs/demo.gif) |
 | Demo video | screen recording (upstream) | upstream maintainer | unknown: no LICENSE file in the repository | README link | MP4, 4.9 MB | [docs/demo.mp4](docs/demo.mp4) |
 
-No fonts or icons are shipped; glyphs are Unicode characters.
+No fonts or icons are shipped; glyphs are Unicode characters, and the optional pictograms
+are code points of the user's own Nerd Font.
 
 ## 10. Acceptance criteria and evidence
 
@@ -137,6 +144,7 @@ No fonts or icons are shipped; glyphs are Unicode characters.
   | Date | Change | Checks run (tool, sizes, modes) | Result | Not run, and why |
   | --- | --- | --- | --- | --- |
   | 2026-11-08 | contract written from the code | source review | gaps listed in §11 | no terminal run: documentation-only change |
+  | 2026-11-09 | Nerd Font pictograms (fork, opt-in) | `node --test` (27); panel outside herdr, tmux 72×26, `AGENT_PANEL_ICONS=nerd` and `plain` | nerd: pictogram tab bar, kind and file-type glyphs; plain: unchanged | not run inside herdr before merge |
   | 2026-11-09 | Made and Apps tabs, file watching (fork) | `node --test` (24); panel run outside herdr (`SA_SESSION`, tmux 70×40) on a real session: Made 62 items, Apps services/background/panes | sections, glyphs and empty states as specified | not run inside herdr before merge (the installed plugin is pinned) |
 
 ## 11. Open choices, known gaps and maintenance
