@@ -88,7 +88,7 @@ or cleared after that):
 
 | Key | Action |
 | --- | --- |
-| `←` / `→`, `Tab`, `1`–`4`, click | Switch tabs |
+| `←` / `→`, `Tab`, `1`–`6`, click | Switch tabs |
 | `j` / `k`, wheel | Move |
 | `g` / `G` | Jump to the first or last item |
 | Enter / click | Messages: show in full (popup) · Subagents: open in Claude · Refs: open |
@@ -96,7 +96,7 @@ or cleared after that):
 | `v` | Subagents: read its conversation in the panel (Esc goes back, `z` zooms) |
 | `a` | Subagents: all of them, or just the last 30 minutes |
 | `m` | Subagents: back to main |
-| `y` | Refs: copy the URL or path · To do: copy the request |
+| `y` | Refs, Made, Apps: copy the URL or path · To do: copy the request |
 | `x` | To do: check off or reopen |
 | `f` / click the header | Subagents: fold or unfold the Finished section |
 | `q` | Close it in this tab; it still follows you to other Claude tabs. The **agent-panel: show / hide** action brings it back here |
@@ -156,6 +156,31 @@ Before 0.4.2 the plugin was called `agentpanel`. To switch, run `herdr plugin un
 install `flowy11/agent-panel`.
 
 Run the provider regression tests with `node --test test/*.test.mjs`.
+
+## Made and Apps (chrysa fork)
+
+Two more tabs, filled from the agent's own tool calls and their results (Claude sessions):
+
+- **Made**: Claude pages it published with the Artifact tool (◆, the link to the page),
+  GitHub pull requests, issues and releases its commands printed and branches it pushed (⎇),
+  and files it wrote (✚) or edited (✎). Newest first in each section.
+- **Apps**: the project's services (● up, ○ down, from your `services-command`, below),
+  background commands (● running, ◌ silent for 30 min, ✓ ⊘ ✗ when they end; their output
+  file opens), browser tabs it drives through the Chrome extension or Playwright (◎, title
+  and URL, closed tabs drop off), and herdr panes its commands acted on (▣, last action and
+  count; Enter focuses the pane's tab).
+
+Click or Enter opens an item (a page or URL in the browser or File Viewer, a file in File
+Viewer), `y` copies it, Space shows it in full.
+
+Services: write the absolute path of an executable in
+`~/.config/herdr/plugins/config/agent-panel/services-command`. Every 3 seconds it runs in
+the agent's folder with the header's arguments and prints one service per line:
+`up|down<TAB>name<TAB>url` (plain text; anything else is dropped). Without that file the
+section is empty.
+
+The panel redraws as soon as the agent's transcript or its subagents folder changes
+(file watching); the one-second timer stays as a fallback.
 
 ## Header (chrysa fork)
 

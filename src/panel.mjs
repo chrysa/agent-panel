@@ -3,7 +3,10 @@
 //   Messages  — your messages and Claude's, in order; Enter/click shows one in full in a popup, Space expands it here
 //   Refs      — URLs and files Claude mentioned, by message; Enter/click opens one, y copies it
 //   To do     — what Claude says you still have to do (its latest ACTION: list); x checks one off, Enter/click shows where it asked
-// Tab, ←/→, 1–4 or a click on the tab bar switches tabs. j/k move, q closes the panel in this tab.
+//   Made      — (fork) pages it published, GitHub PRs/releases/pushes, files it wrote; Enter/click opens, y copies
+//   Apps      — (fork) project services, background commands, browser tabs and herdr panes it drives; Enter/click opens
+// Tab, ←/→, 1–6 or a click on the tab bar switches tabs. j/k move, q closes the panel in this tab.
+// The transcript is watched: a new line redraws at once (the 1 s timer is the fallback).
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -13,6 +16,7 @@ import { viewInClaude } from "./jump.mjs";
 import { fitLine, headerLines, markShown, unmarkShown } from "./header.mjs";
 import { displayPath } from "./refs.mjs";
 import { openingTab, tabAt } from "./tabs.mjs";
+import { serviceItems } from "./services.mjs";
 import { WHO, c, plain, width, fit, fitMiddle, wrap, dur, ago, firstLine, spread, copyText } from "./text.mjs";
 
 const out = process.stdout;
@@ -28,11 +32,13 @@ const ORDER = { running: 0, stalled: 1, failed: 2, killed: 3, done: 4 };
 
 let tracked = null; // { paneId, sessionId, cwd, status }
 let session = null;
-const TABS = ["subagents", "messages", "refs", "todo"];
+const TABS = ["subagents", "messages", "refs", "todo", "made", "apps"];
 const savedTab = () => { try { const t = fs.readFileSync(TAB_FILE, "utf8").trim(); return TABS.includes(t) ? t : TABS[0]; } catch { return TABS[0]; } };
 let tab = savedTab(); // the shown tab; openingTab() may differ from the saved one for a new session
 let refs = []; // what the Refs tab lists: by the Claude message that mentions them, newest first
 let todos = []; // what the To do tab lists: Claude's latest list, in its order, the ones you checked off last
+let made = []; // fork: what the Made tab lists (Outputs.made)
+let apps = []; // fork: what the Apps tab lists (services, then Outputs.apps)
 // Checked-off to-dos: { [sessionId]: [todo id] }.
 const DONE_FILE = path.join(STATE_DIR, "todo-done.json");
 const readDone = () => { try { return JSON.parse(fs.readFileSync(DONE_FILE, "utf8")); } catch { return {}; } };
@@ -41,6 +47,8 @@ const views = {
   subagents: { cursor: 0, scroll: 0, expanded: new Set() },
   refs: { cursor: 0, scroll: 0, expanded: new Set() },
   todo: { cursor: 0, scroll: 0, expanded: new Set() },
+  made: { cursor: 0, scroll: 0, expanded: new Set() },
+  apps: { cursor: 0, scroll: 0, expanded: new Set() },
 };
 let showAll = false;
 const FINISHED_FILE = path.join(STATE_DIR, "finished-collapsed");
@@ -97,6 +105,8 @@ function pickAgent() {
     views.subagents = { cursor: 0, scroll: 0, expanded: new Set() };
     views.refs = { cursor: 0, scroll: 0, expanded: new Set() };
     views.todo = { cursor: 0, scroll: 0, expanded: new Set() };
+    views.made = { cursor: 0, scroll: 0, expanded: new Set() };
+    views.apps = { cursor: 0, scroll: 0, expanded: new Set() };
     refresh();
     tab = openingTab(savedTab(), { subagents: agents.length + finishedCount, todos: todos.filter((t) => !t.done).length });
   }
@@ -104,9 +114,45 @@ function pickAgent() {
   markShown(pick.pane_id);
 }
 
+// Keep the cursor on the same item (by key) when a list is rebuilt.
+function keepCursor(view, before, after, key) {
+  const at = before[view.cursor] ? key(before[view.cursor]) : null;
+  const i = at === null ? -1 : after.findIndex((x) => key(x) === at);
+  view.cursor = i >= 0 ? i : Math.min(view.cursor, Math.max(0, after.length - 1));
+}
+const itemKey = (x) => `${x.kind}:${x.id || x.value}:${x.title}`;
+
+// Real time: the transcript and the subagents folder are watched, so a new line redraws at once.
+let watched = "";
+let watchers = [];
+let soon = null;
+function watchSession() {
+  const file = session?.mainFile || "";
+  if (file === watched) return;
+  for (const w of watchers) try { w.close(); } catch {}
+  watchers = [];
+  watched = file;
+  if (!file) return;
+  const changed = () => {
+    if (soon) return;
+    soon = setTimeout(() => { soon = null; refresh(); render(); }, 40);
+  };
+  for (const target of [file, session.dir]) {
+    try { if (target) watchers.push(fs.watch(target, changed)); } catch {}
+  }
+}
+
 function refresh() {
-  if (!session) { agents = []; refs = []; todos = []; return; }
+  if (!session) { agents = []; refs = []; todos = []; made = []; apps = []; return; }
   session.refresh();
+  watchSession();
+  const outs = session.outputs;
+  const nextMade = outs ? outs.made() : [];
+  keepCursor(views.made, made, nextMade, itemKey);
+  made = nextMade;
+  const nextApps = [...serviceItems(tracked, session, render), ...(outs ? outs.apps() : [])];
+  keepCursor(views.apps, apps, nextApps, itemKey);
+  apps = nextApps;
   // Keep the cursor on the same ref when a new mention reorders the list.
   const at = refs[views.refs.cursor]?.value;
   refs = [...session.refs.values()].sort((a, b) => b.msg - a.msg || a.order - b.order);
@@ -131,7 +177,8 @@ function refresh() {
   views.subagents.cursor = Math.min(views.subagents.cursor, Math.max(0, agents.length - 1));
 }
 
-const items = () => (tab === "messages" ? session?.messages || [] : tab === "refs" ? refs : tab === "todo" ? todos : agents);
+const LISTS = { refs: () => refs, todo: () => todos, made: () => made, apps: () => apps };
+const items = () => (tab === "messages" ? session?.messages || [] : LISTS[tab] ? LISTS[tab]() : agents);
 
 // ---------- views ----------
 
@@ -318,6 +365,64 @@ function todoRows(w, now) {
   return rows;
 }
 
+// Fork: Made and Apps rows. One line each: an icon, the title, its age; Space shows the full value.
+const ITEM_ICON = {
+  page: `${c.cyan}◆${c.reset}`, github: `${c.magenta}⎇${c.reset}`, file: `${c.dim}▤${c.reset}`,
+  service: null, task: null, browser: `${c.cyan}◎${c.reset}`, pane: `${c.blue}▣${c.reset}`,
+};
+const SECTION = {
+  page: "PAGES", github: "GITHUB", file: "FILES", service: "SERVICES", task: "BACKGROUND",
+  browser: "BROWSER", pane: "HERDR PANES",
+};
+function itemRows(list, view, w, now, empty) {
+  const rows = [];
+  const cwd = tracked?.cwd || session?.cwd || "";
+  let section = null;
+  list.forEach((x, i) => {
+    const live = (y) => y.status === "running" || y.status === "stalled";
+    const group = x.kind === "task" ? (live(x) ? "task" : "task-done") : x.kind;
+    if (group !== section) {
+      if (rows.length) rows.push({ text: "", i: -1 });
+      const n = list.filter((y) => (y.kind === "task" ? (live(y) ? "task" : "task-done") : y.kind) === group).length;
+      rows.push({ text: `${c.dim}${group === "task-done" ? "FINISHED" : SECTION[x.kind]} · ${n}${c.reset}`, i: -1 });
+      section = group;
+    }
+    const icon = x.kind === "service" ? (x.up ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`)
+      : x.kind === "task" ? ICON[x.status] || ICON.done
+      : x.kind === "file" ? (x.written ? `${c.green}✚${c.reset}` : `${c.cyan}✎${c.reset}`)
+      : ITEM_ICON[x.kind];
+    const name = x.kind === "file" ? displayPath(x.value, cwd)
+      : x.kind === "service" ? `${x.title}${x.value ? ` ${c.dim}${x.value.replace(/^https?:\/\//, "")}${c.reset}` : ""}`
+      : x.kind === "browser" ? (x.title || x.value.replace(/^https?:\/\//, ""))
+      : x.kind === "pane" ? `${x.value} ${c.dim}${x.title}${x.count > 1 ? ` ×${x.count}` : ""}${c.reset}`
+      : x.title;
+    const age = x.kind === "service" ? "" : `${c.dim}${ago(now - (x.kind === "task" && x.ended ? x.ended : x.ts))}${c.reset}`;
+    const room = w - width(age) - 5;
+    const title = x.kind === "file" ? fitMiddle(name, room) : width(name) > room ? fit(plain(name), room) : name;
+    rows.push({ text: spread(`  ${icon} ${title}${c.reset}`, age, w), i });
+    if (view.expanded.has(itemKey(x)) && x.value) for (const line of wrap(x.value, w - 6).slice(0, 4)) rows.push({ text: `      ${c.dim}${line}${c.reset}`, i });
+  });
+  if (!list.length) rows.push({ text: `${c.dim}  ${session ? empty : "No supported agent session in this tab"}${c.reset}`, i: -1 });
+  return rows;
+}
+const madeRows = (w, now) => itemRows(made, views.made, w, now, session?.outputs ? "Nothing published, pushed or written yet" : "Not tracked for this agent");
+const appsRows = (w, now) => itemRows(apps, views.apps, w, now, "No services, background commands, browser tabs or panes yet");
+
+// Enter or click on a Made/Apps item: pages, PRs, services and tabs open in the browser; files
+// and a background command's output in the File Viewer; a herdr pane gets focus.
+function openItem(x) {
+  if (!x) return;
+  if (x.kind === "pane") {
+    const pane = (snapshot()?.panes || []).find((p) => p.pane_id === x.value);
+    const res = pane ? herdr(["tab", "focus", pane.tab_id]) : { ok: false };
+    flash = res.ok ? `${c.green}Focused ${x.value}` : `${c.red}Pane ${x.value} is gone`;
+    flashUntil = Date.now() + 3000;
+    return render();
+  }
+  if (!x.value) { flash = `${c.dim}Nothing to open`; flashUntil = Date.now() + 2000; return render(); }
+  openRef({ kind: x.kind === "file" || x.kind === "task" ? "file" : "url", value: x.value, line: 0 });
+}
+
 function toggleTodo(t) {
   if (!t || !session) return;
   const all = readDone();
@@ -441,11 +546,13 @@ function draw() {
     subagents: running ? `${c.yellow}●${running}${c.reset}` : "", // running only, like Claude's own count
     refs: refs.length ? `${c.dim}${refs.length}${c.reset}` : "",
     todo: (() => { const n = todos.filter((t) => !t.done).length; return n ? `${c.yellow}○${n}${c.reset}` : ""; })(),
+    made: made.length ? `${c.dim}${made.length}${c.reset}` : "",
+    apps: (() => { const n = apps.filter((x) => x.kind === "task" && x.status === "running").length; return n ? `${c.yellow}●${n}${c.reset}` : apps.length ? `${c.dim}${apps.length}${c.reset}` : ""; })(),
   };
   const names = [
-    { messages: "Messages", subagents: "Subagents", refs: "Refs", todo: "To do" },
-    { messages: "Msgs", subagents: "Agents", refs: "Refs", todo: "To do" },
-    { messages: "M", subagents: "A", refs: "R", todo: "D" },
+    { messages: "Messages", subagents: "Subagents", refs: "Refs", todo: "To do", made: "Made", apps: "Apps" },
+    { messages: "Msgs", subagents: "Agents", refs: "Refs", todo: "To do", made: "Made", apps: "Apps" },
+    { messages: "M", subagents: "A", refs: "R", todo: "D", made: "O", apps: "P" },
   ];
   let bar = "";
   for (const set of names) {
@@ -469,7 +576,8 @@ function draw() {
   ];
 
   const v = views[tab];
-  const rows = tab === "messages" ? messageRows(w, now) : tab === "refs" ? refRows(w, now) : tab === "todo" ? todoRows(w, now) : subagentRows(w, now);
+  const rows = tab === "messages" ? messageRows(w, now) : tab === "refs" ? refRows(w, now) : tab === "todo" ? todoRows(w, now)
+    : tab === "made" ? madeRows(w, now) : tab === "apps" ? appsRows(w, now) : subagentRows(w, now);
   const bodyH = H - head.length - 1;
   v.maxScroll = Math.max(0, rows.length - bodyH);
   if (v.free) {
@@ -499,6 +607,7 @@ function draw() {
   else if (tab === "messages") help = `${c.dim}click/Enter full message · Space expand · q close`;
   else if (tab === "refs") help = `${c.dim}click/Enter open · y copy · click ● message · q close`;
   else if (tab === "todo") help = `${c.dim}x done · click/Enter message · y copy · q close`;
+  else if (tab === "made" || tab === "apps") help = `${c.dim}click/Enter open · Space details · y copy · q close`;
   else help = `${c.dim}${w >= 58 ? `${session?.provider === "codex" ? "click/Enter read" : "click/Enter open in Claude"} · v read here · f finished · a ${showAll ? "recent" : "all"}` : "click open · v read · f finished"}`;
   const footer = width(help) > w ? `${c.dim}${fit(plain(help), w)}` : help;
 
@@ -614,6 +723,8 @@ function popOut(i) {
 function activate() { // Enter or click on the current item
   const v = views[tab];
   if (tab === "refs") return openRef(refs[v.cursor]);
+  if (tab === "made") return openItem(made[v.cursor]);
+  if (tab === "apps") return openItem(apps[v.cursor]);
   if (tab === "todo") return todos[v.cursor] && popOut(todos[v.cursor].msg);
   if (tab === "messages") return popOut(v.cursor);
   const a = agents[v.cursor];
@@ -674,7 +785,7 @@ function onKey(key) {
   if (key === "q") return quit({ dismiss: true });
   if (key === "\t" || key === "\x1b[C") setTab(TABS[(TABS.indexOf(tab) + 1) % TABS.length]); // Tab, →
   else if (key === "\x1b[D") setTab(TABS[(TABS.indexOf(tab) + TABS.length - 1) % TABS.length]); // ←
-  else if (/^[1-4]$/.test(key)) setTab(TABS[Number(key) - 1]);
+  else if (/^[1-6]$/.test(key)) setTab(TABS[Number(key) - 1]);
   else if (key === "j" || key === "\x1b[B") move(1);
   else if (key === "k" || key === "\x1b[A") move(-1);
   else if (key === "g") move(-Infinity);
@@ -682,12 +793,14 @@ function onKey(key) {
   else if (key === "\r") return activate();
   else if (key === " " || key === "l" || key === "h") {
     const v = views[tab];
-    const id = tab === "messages" ? v.cursor : tab === "refs" ? refs[v.cursor]?.value : agents[v.cursor]?.id;
+    const id = tab === "messages" ? v.cursor : tab === "refs" ? refs[v.cursor]?.value
+      : tab === "made" || tab === "apps" ? (items()[v.cursor] ? itemKey(items()[v.cursor]) : undefined) : agents[v.cursor]?.id;
     if (id !== undefined && id !== -1) v.expanded.has(id) ? v.expanded.delete(id) : v.expanded.add(id);
   } else if (key === "m" && tab === "subagents") return openInClaude("main");
   else if (key === "v" && tab === "subagents" && agents[views.subagents.cursor]) openDetail(agents[views.subagents.cursor]);
   else if (key === "a" && tab === "subagents") { showAll = !showAll; refresh(); }
   else if (key === "y" && tab === "refs") return copyRef(refs[views.refs.cursor]);
+  else if (key === "y" && (tab === "made" || tab === "apps") && items()[views[tab].cursor]?.value) return copyRef(items()[views[tab].cursor]);
   else if (key === "x" && tab === "todo") return toggleTodo(todos[views.todo.cursor]);
   else if (key === "y" && tab === "todo" && todos[views.todo.cursor]) {
     // A request with a command in it ("Run `herdr server stop`") copies just the command.
