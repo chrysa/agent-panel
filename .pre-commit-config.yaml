@@ -1,0 +1,87 @@
+repos:
+  - hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - args:
+          - --maxkb=1024
+        id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: mixed-line-ending
+      - id: detect-private-key
+    repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+  - hooks:
+      - args:
+          - --baseline
+          - .secrets.baseline
+        exclude: package.lock.json|yarn.lock|pnpm-lock.yaml
+        id: detect-secrets
+    repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+  - hooks:
+      - args:
+          - --strict
+          - --force-scope
+          - feat
+          - fix
+          - chore
+          - docs
+          - refactor
+          - test
+          - ci
+          - build
+          - perf
+        id: conventional-pre-commit
+        stages:
+          - commit-msg
+    repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.4.0
+  - hooks:
+      - args:
+          - --disable
+          - MD013
+          - MD033
+          - --
+        id: markdownlint
+    repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.43.0
+  - hooks:
+      - args:
+          - -d
+          - '{extends: default, rules: {line-length: disable, document-start: disable}}'
+        id: yamllint
+    repo: https://github.com/adrienverge/yamllint
+    rev: v1.35.1
+  - hooks:
+      - files: ^\.github/workflows/.*\.ya?ml$
+        id: actionlint
+    repo: https://github.com/rhysd/actionlint
+    rev: v1.7.7
+  - hooks:
+      - id: regression-gate
+      # Application Dockerfiles must be multi-stage AND ship a `production` and a
+      # `dev` stage (shared-standards artifact-isolation rule). Scoped to the main
+      # Dockerfile — dedicated Dockerfile.test/.typecheck/.sync images are exempt.
+      - args:
+          - --require-target=production
+          - --require-target=dev
+        exclude: (\.test|\.typecheck|\.sync|e2e/Dockerfile)$
+        files: (^|/)Dockerfile$
+        id: dockerfile-multi-stage-check
+      # Claude Code assets: a SKILL.md or agent with broken front matter is silently
+      # invisible to the model, and an MCP entry with a bad transport never connects.
+      - id: claude-skill-frontmatter
+      - id: claude-agent-frontmatter
+      - id: claude-mcp-config
+      # Tests are pytest + pytest-mock. The stdlib unittest framework and
+      # unittest.mock are forbidden; block them at write time, not in review.
+      - id: python-no-unittest-import
+      # The agent loads .claude/ at session start; an empty mirror loads no skill
+      # and says nothing. This is the only guard against that.
+      - id: claude-assets-present
+    repo: https://github.com/chrysa/pre-commit-tools
+    rev: v0.1.1-100
