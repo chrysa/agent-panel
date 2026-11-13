@@ -1,11 +1,15 @@
 // Side panel for the Claude Code session in this tab, with four tabs:
 //   Subagents — its subagents; Enter/click switches Claude to that subagent, m back to main
 //   Messages  — your messages and Claude's, in order; Enter/click shows one in full in a popup, Space expands it here
-//   Refs      — URLs and files Claude mentioned, by message; Enter/click opens one, y copies it
+//   Refs      — URLs and files Claude mentioned, by message, then GitHub links its commands only read; Enter/click opens one, y copies it
 //   To do     — what Claude says you still have to do (its latest ACTION: list); x checks one off, Enter/click shows where it asked
-//   Made      — (fork) pages it published, GitHub PRs/releases/pushes, files it wrote; Enter/click opens, y copies
+//   Made      — (fork) pages it published, what it did on GitHub (PRs, issues, releases, pushes), files it wrote; Enter/click opens, y copies
 //   Apps      — (fork) project services, background commands, browser tabs and herdr panes it drives; Enter/click opens
-// Tab, ←/→, 1–6 or a click on the tab bar switches tabs. j/k move, q closes the panel in this tab.
+//   Repo      — (fork) the project's open pull requests, worktrees and branches without a PR; Enter/click opens
+// Made is scoped to the project (the agent's git work tree, else the repos the session touched):
+// the rest sits in a folded OUTSIDE THE PROJECT section. (fork) In Refs, Made, Apps and Repo every
+// section has a header with its item count; click or Space on a header folds or unfolds it.
+// Tab, ←/→, 1–7 or a click on the tab bar switches tabs. j/k move, q closes the panel in this tab.
 // The transcript is watched: a new line redraws at once (the 1 s timer is the fallback).
 import fs from "node:fs";
 import path from "node:path";
@@ -18,6 +22,8 @@ import { displayPath } from "./refs.mjs";
 import { openingTab, tabAt } from "./tabs.mjs";
 import { serviceItems } from "./services.mjs";
 import { MODE, fileIcon, githubIcon, icon } from "./icons.mjs";
+import { ProjectSummaries, clean, projectRoots, scopeMade } from "./project.mjs";
+import { foldState, sectioned } from "./sections.mjs";
 import { WHO, c, plain, width, fit, fitMiddle, wrap, dur, ago, firstLine, spread, copyText } from "./text.mjs";
 
 const out = process.stdout;
@@ -33,23 +39,30 @@ const ORDER = { running: 0, stalled: 1, failed: 2, killed: 3, done: 4 };
 
 let tracked = null; // { paneId, sessionId, cwd, status }
 let session = null;
-const TABS = ["subagents", "messages", "refs", "todo", "made", "apps"];
+const TABS = ["subagents", "messages", "refs", "todo", "made", "apps", "repo"];
 const savedTab = () => { try { const t = fs.readFileSync(TAB_FILE, "utf8").trim(); return TABS.includes(t) ? t : TABS[0]; } catch { return TABS[0]; } };
 let tab = savedTab(); // the shown tab; openingTab() may differ from the saved one for a new session
 let refs = []; // what the Refs tab lists: by the Claude message that mentions them, newest first
 let todos = []; // what the To do tab lists: Claude's latest list, in its order, the ones you checked off last
 let made = []; // fork: what the Made tab lists (Outputs.made)
 let apps = []; // fork: what the Apps tab lists (services, then Outputs.apps)
+let repoItems = []; // fork: what the Repo tab lists (pull requests, worktrees, branches without a PR, per repo)
+let seen = []; // fork: GitHub links the agent's commands only read, listed in Refs after the messages' links
+const shown = { refs: [], made: [], apps: [], repo: [] }; // fork: those lists as shown, with section headers, folded ones closed
+const FOLDED_FIRST = { made: new Set(["outside"]) }; // fork: sections that start folded
+let projectRootsNow = []; // fork: the project's work trees
+const projects = new ProjectSummaries();
 // Checked-off to-dos: { [sessionId]: [todo id] }.
 const DONE_FILE = path.join(STATE_DIR, "todo-done.json");
 const readDone = () => { try { return JSON.parse(fs.readFileSync(DONE_FILE, "utf8")); } catch { return {}; } };
 const views = {
   messages: { cursor: -1, scroll: 0, expanded: new Set(), follow: true },
   subagents: { cursor: 0, scroll: 0, expanded: new Set() },
-  refs: { cursor: 0, scroll: 0, expanded: new Set() },
+  refs: { cursor: 0, scroll: 0, expanded: new Set(), fold: foldState() },
   todo: { cursor: 0, scroll: 0, expanded: new Set() },
-  made: { cursor: 0, scroll: 0, expanded: new Set() },
-  apps: { cursor: 0, scroll: 0, expanded: new Set() },
+  made: { cursor: 0, scroll: 0, expanded: new Set(), fold: foldState(FOLDED_FIRST.made) },
+  apps: { cursor: 0, scroll: 0, expanded: new Set(), fold: foldState() },
+  repo: { cursor: 0, scroll: 0, expanded: new Set(), fold: foldState() },
 };
 let showAll = false;
 const FINISHED_FILE = path.join(STATE_DIR, "finished-collapsed");
@@ -104,10 +117,11 @@ function pickAgent() {
     session = createSession(sessionId, pick.agent);
     views.messages = { cursor: -1, scroll: 0, expanded: new Set(), follow: true };
     views.subagents = { cursor: 0, scroll: 0, expanded: new Set() };
-    views.refs = { cursor: 0, scroll: 0, expanded: new Set() };
+    views.refs = { cursor: 0, scroll: 0, expanded: new Set(), fold: foldState() };
     views.todo = { cursor: 0, scroll: 0, expanded: new Set() };
-    views.made = { cursor: 0, scroll: 0, expanded: new Set() };
-    views.apps = { cursor: 0, scroll: 0, expanded: new Set() };
+    views.made = { cursor: 0, scroll: 0, expanded: new Set(), fold: foldState(FOLDED_FIRST.made) };
+    views.apps = { cursor: 0, scroll: 0, expanded: new Set(), fold: foldState() };
+    views.repo = { cursor: 0, scroll: 0, expanded: new Set(), fold: foldState() };
     refresh();
     tab = openingTab(savedTab(), { subagents: agents.length + finishedCount, todos: todos.filter((t) => !t.done).length });
   }
@@ -121,7 +135,36 @@ function keepCursor(view, before, after, key) {
   const i = at === null ? -1 : after.findIndex((x) => key(x) === at);
   view.cursor = i >= 0 ? i : Math.min(view.cursor, Math.max(0, after.length - 1));
 }
-const itemKey = (x) => `${x.kind}:${x.id || x.value}:${x.title}`;
+const itemKey = (x) => (x.kind === "section" ? `section:${x.group}` : `${x.kind}:${x.id || x.value}:${x.title}`);
+
+// Fork: the lists as shown: a header before each section (its count), folded sections closed.
+// Made/Apps: by kind (files by repo, outside the project apart); Refs: by message, then the
+// links only read; Repo: by repo, then pull requests, worktrees, branches (10 until "+N more").
+const itemGroup = (x) => (x.outside ? "outside"
+  : x.kind === "task" ? (x.status === "running" || x.status === "stalled" ? "task" : "task-done")
+  : x.group ? `${x.kind}:${x.group}` : x.kind);
+const branchHidden = (x) => x.kind === "branch" && x.at >= MAX_BRANCH_ROWS && !views.repo.expanded.has(`more:${x.repo}`);
+function rebuildViews() {
+  const repoFolded = views.repo.fold.folded;
+  const next = {
+    made: sectioned(made, (x) => [itemGroup(x)], views.made.fold.folded),
+    apps: sectioned(apps, (x) => [itemGroup(x)], views.apps.fold.folded),
+    refs: sectioned([...refs, ...seen], (r) => [r.seen ? "seen" : `msg:${r.msg}`], views.refs.fold.folded),
+    repo: sectioned(repoItems.filter((x) => x.kind === "repo-head" || !repoFolded(`repo:${x.repo}`)),
+      (x) => (x.kind === "repo-head" ? [] : [`${x.repo}:${x.kind}`]), repoFolded, branchHidden),
+  };
+  for (const [name, list] of Object.entries(next)) {
+    keepCursor(views[name], shown[name], list, itemKey);
+    shown[name] = list;
+  }
+}
+// A section header (or a repo's) folds or unfolds; the cursor stays on it.
+function toggleSection(x) {
+  views[tab].fold.toggle(x.kind === "repo-head" ? `repo:${x.repo}` : x.group);
+  rebuildViews();
+  render();
+}
+const isHeader = (x) => x?.kind === "section" || x?.kind === "repo-head";
 
 // Real time: the transcript and the subagents folder are watched, so a new line redraws at once.
 let watched = "";
@@ -144,21 +187,28 @@ function watchSession() {
 }
 
 function refresh() {
-  if (!session) { agents = []; refs = []; todos = []; made = []; apps = []; return; }
+  if (!session) { agents = []; refs = []; todos = []; made = []; apps = []; repoItems = []; seen = []; rebuildViews(); return; }
   session.refresh();
   watchSession();
   const outs = session.outputs;
-  const nextMade = outs ? outs.made() : [];
-  keepCursor(views.made, made, nextMade, itemKey);
-  made = nextMade;
-  const nextApps = [...serviceItems(tracked, session, render), ...(outs ? outs.apps() : [])];
-  keepCursor(views.apps, apps, nextApps, itemKey);
-  apps = nextApps;
-  // Keep the cursor on the same ref when a new mention reorders the list.
-  const at = refs[views.refs.cursor]?.value;
+  // Fork: the project, its summaries, and Made scoped to it (grouped by repo when several).
+  projectRootsNow = projectRoots(tracked?.cwd || session.cwd || "", outs ? [...outs.files.values()] : []);
+  const summaries = projects.summaries(projectRootsNow, render);
+  const slugs = new Set(summaries.map((s) => s.slug).filter(Boolean));
+  const several = projectRootsNow.length > 1;
+  const rootOf = (file) => projectRootsNow.find((root) => file === root || file.startsWith(root + "/"));
+  const order = (x) => (x.kind === "file" && several ? projectRootsNow.indexOf(rootOf(x.value)) : -1);
+  const outside = (x) => Number(!!x.outside);
+  made = scopeMade(outs ? outs.made() : [], projectRootsNow, slugs)
+    .map((x) => (several && x.kind === "file" && !x.outside ? { ...x, group: clean(path.basename(rootOf(x.value) || "")) } : x))
+    .map((x, n) => ({ x, n })) // files of one repo together (in the project's order), newest first inside; outside last
+    .sort((a, b) => outside(a.x) - outside(b.x) || (a.x.kind === "file" && b.x.kind === "file" ? order(a.x) - order(b.x) || a.n - b.n : a.n - b.n))
+    .map(({ x }) => x);
+  repoItems = repoItemsOf(summaries);
+  apps = [...serviceItems(tracked, session, render), ...(outs ? outs.apps() : [])];
   refs = [...session.refs.values()].sort((a, b) => b.msg - a.msg || a.order - b.order);
-  const keep = refs.findIndex((r) => r.value === at);
-  views.refs.cursor = keep >= 0 ? keep : Math.min(views.refs.cursor, Math.max(0, refs.length - 1));
+  seen = outs ? outs.seen().map((x) => ({ kind: "url", value: x.value, title: x.title, ts: x.ts, line: 0, seen: true })) : [];
+  rebuildViews(); // the cursors stay on the same items (by key) when the lists change
   const doneIds = new Set(readDone()[session.sessionId] || []);
   const atTodo = todos[views.todo.cursor]?.id;
   todos = session.todos.map((t) => ({ ...t, done: doneIds.has(t.id) }))
@@ -178,7 +228,7 @@ function refresh() {
   views.subagents.cursor = Math.min(views.subagents.cursor, Math.max(0, agents.length - 1));
 }
 
-const LISTS = { refs: () => refs, todo: () => todos, made: () => made, apps: () => apps };
+const LISTS = { refs: () => shown.refs, todo: () => todos, made: () => shown.made, apps: () => shown.apps, repo: () => shown.repo };
 const items = () => (tab === "messages" ? session?.messages || [] : LISTS[tab] ? LISTS[tab]() : agents);
 
 // ---------- views ----------
@@ -295,32 +345,36 @@ function subagentRows(w, now) {
   return rows;
 }
 
-// Grouped under the Claude message that mentions them, newest first; a click on the group's
-// header shows that message in full.
+// Grouped under the Claude message that mentions them, newest first, then (fork) the GitHub links
+// its commands only read. Enter on a message's header shows that message in full; click or Space folds.
+const fold = (x) => `${c.dim}${x.folded ? "▸" : "▾"}${c.reset}`;
 function refRows(w, now) {
   const v = views.refs;
   const rows = [];
   const cwd = tracked?.cwd || session?.cwd || "";
-  let group = -1;
-  refs.forEach((r, i) => {
-    if (r.msg !== group) {
+  shown.refs.forEach((r, i) => {
+    if (r.kind === "section") {
       if (rows.length) rows.push({ text: "", i: -1 });
-      const m = session.messages[r.msg];
-      const time = `${c.dim}${ago(now - (m?.ts || r.ts))}${c.reset}`;
-      const title = `${c.orange}●${c.reset} ${c.dim}${fit(firstLine(m?.text).replace(/\*\*|`/g, ""), w - width(time) - 4)}${c.reset}`;
-      rows.push({ text: spread(title, time, w), i: `msg:${r.msg}` });
-      group = r.msg;
+      if (r.group === "seen") {
+        rows.push({ text: `${fold(r)} ${c.dim}${icon("github")}READ BY THE AGENT · ${r.n}${c.reset}`, i });
+        return;
+      }
+      const m = session.messages[r.first.msg];
+      const time = `${c.dim}${r.n} · ${ago(now - (m?.ts || r.first.ts))}${c.reset}`;
+      const title = `${fold(r)} ${c.orange}●${c.reset} ${c.dim}${fit(firstLine(m?.text).replace(/\*\*|`/g, ""), w - width(time) - 6)}${c.reset}`;
+      rows.push({ text: spread(title, time, w), i });
+      return;
     }
     const mark = " "; // the selection is a bar in the margin (draw)
     let stat = null;
     if (r.kind === "file") try { stat = fs.statSync(r.value); } catch {}
     const missing = r.kind === "file" && !stat;
     const edited = r.kind === "file" && session.edited.has(r.value);
-    const pict = r.kind === "url" ? icon("url") : fileIcon(r.value, { dir: !!stat?.isDirectory() });
-    const glyph = missing ? `${c.dim}?${c.reset}` : pict ? `${r.kind === "url" ? c.cyan : c.dim}${pict.trim()}${c.reset}`
+    const pict = r.seen ? githubIcon(r.title) : r.kind === "url" ? icon("url") : fileIcon(r.value, { dir: !!stat?.isDirectory() });
+    const glyph = missing ? `${c.dim}?${c.reset}` : pict ? `${r.kind === "url" ? r.seen ? c.magenta : c.cyan : c.dim}${pict.trim()}${c.reset}`
       : r.kind === "url" ? `${c.cyan}↗${c.reset}` : `${c.dim}▤${c.reset}`;
-    const right = edited ? `${c.cyan}✎${c.reset}` : "";
-    const name = r.kind === "url" ? r.value.replace(/^https?:\/\//, "") : displayPath(r.value, cwd) + (stat?.isDirectory() ? "/" : "") + (r.line ? `:${r.line}` : "");
+    const right = r.seen ? `${c.dim}${ago(now - r.ts)}${c.reset}` : edited ? `${c.cyan}✎${c.reset}` : "";
+    const name = r.seen ? r.title : r.kind === "url" ? r.value.replace(/^https?:\/\//, "") : displayPath(r.value, cwd) + (stat?.isDirectory() ? "/" : "") + (r.line ? `:${r.line}` : "");
     const title = fitMiddle(name, w - width(right) - 5);
     const style = missing ? c.dim : "";
     rows.push({ text: spread(`${mark} ${glyph} ${style}${title}${c.reset}`, right, w), i });
@@ -329,7 +383,7 @@ function refRows(w, now) {
       if (missing) rows.push({ text: `      ${c.dim}not on disk${c.reset}`, i });
     }
   });
-  if (!refs.length) rows.push({ text: `${c.dim}  ${session ? "The agent hasn't mentioned any URLs or files yet" : "No supported agent session in this tab"}${c.reset}`, i: -1 });
+  if (!shown.refs.length) rows.push({ text: `${c.dim}  ${session ? "The agent hasn't mentioned any URLs or files yet" : "No supported agent session in this tab"}${c.reset}`, i: -1 });
   return rows;
 }
 
@@ -389,16 +443,14 @@ function kindIcon(x) {
 function itemRows(list, view, w, now, empty) {
   const rows = [];
   const cwd = tracked?.cwd || session?.cwd || "";
-  let section = null;
   list.forEach((x, i) => {
-    const live = (y) => y.status === "running" || y.status === "stalled";
-    const group = x.kind === "task" ? (live(x) ? "task" : "task-done") : x.kind;
-    if (group !== section) {
+    if (x.kind === "section") {
       if (rows.length) rows.push({ text: "", i: -1 });
-      const n = list.filter((y) => (y.kind === "task" ? (live(y) ? "task" : "task-done") : y.kind) === group).length;
-      const pict = group === "task-done" ? icon("finished") : icon(SECTION_ICON[x.kind]);
-      rows.push({ text: `${c.dim}${pict}${group === "task-done" ? "FINISHED" : SECTION[x.kind]} · ${n}${c.reset}`, i: -1 });
-      section = group;
+      const f = x.first;
+      const pict = x.group === "task-done" ? icon("finished") : x.group === "outside" ? icon("folder") : icon(SECTION_ICON[f.kind]);
+      const label = x.group === "task-done" ? "FINISHED" : x.group === "outside" ? "OUTSIDE THE PROJECT" : `${SECTION[f.kind]}${f.group ? ` · ${f.group}` : ""}`;
+      rows.push({ text: `${fold(x)} ${c.dim}${pict}${label} · ${x.n}${c.reset}`, i });
+      return;
     }
     const pict = kindIcon(x);
     const state = x.kind === "service" ? (x.up ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`)
@@ -413,16 +465,86 @@ function itemRows(list, view, w, now, empty) {
       : x.kind === "pane" ? `${x.value} ${c.dim}${x.title}${x.count > 1 ? ` ×${x.count}` : ""}${c.reset}`
       : x.title;
     const age = x.kind === "service" ? "" : `${c.dim}${ago(now - (x.kind === "task" && x.ended ? x.ended : x.ts))}${c.reset}`;
-    const room = w - width(age) - 5;
+    // The title gets what the glyphs and the age leave (pictograms take 2 columns more), so the row never wraps.
+    const lead = `  ${glyph}`;
+    const room = w - width(lead) - width(age) - 1;
     const title = x.kind === "file" ? fitMiddle(name, room) : width(name) > room ? fit(plain(name), room) : name;
-    rows.push({ text: spread(`  ${glyph}${title}${c.reset}`, age, w), i });
+    rows.push({ text: spread(`${lead}${title}${c.reset}`, age, w), i });
     if (view.expanded.has(itemKey(x)) && x.value) for (const line of wrap(x.value, w - 6).slice(0, 4)) rows.push({ text: `      ${c.dim}${line}${c.reset}`, i });
   });
   if (!list.length) rows.push({ text: `${c.dim}  ${session ? empty : "No supported agent session in this tab"}${c.reset}`, i: -1 });
   return rows;
 }
-const madeRows = (w, now) => itemRows(made, views.made, w, now, session?.outputs ? "Nothing published, pushed or written yet" : "Not tracked for this agent");
-const appsRows = (w, now) => itemRows(apps, views.apps, w, now, "No services, background commands, browser tabs or panes yet");
+// Fork: the Repo tab's items, one list for every repo of the project.
+function repoItemsOf(summaries) {
+  const items = [];
+  const seen = new Set(); // a repo reached through its main checkout and a worktree is summed up once
+  for (const s of summaries) {
+    if (s.slug && seen.has(s.slug)) continue;
+    if (s.slug) seen.add(s.slug);
+    const repo = s.slug || clean(path.basename(s.root));
+    items.push({ kind: "repo-head", repo, root: s.root, title: repo, value: s.slug ? `https://github.com/${s.slug}` : s.root,
+      ghError: s.ghError, loading: s.loading, counts: [s.pulls.length, s.worktrees.length, s.branches.length], ts: 0 });
+    for (const p of s.pulls) items.push({ kind: "pull", repo, root: s.root, ...p, value: p.url, title: `#${p.number} ${p.title}` });
+    for (const w of s.worktrees) items.push({ kind: "worktree", repo, root: s.root, ...w, value: w.path, title: w.branch || "(detached)", ts: 0 });
+    s.branches.forEach((b, at) => {
+      items.push({ kind: "branch", repo, root: s.root, ...b, at, total: s.branches.length, title: b.name,
+        value: b.pushed && s.slug ? `https://github.com/${s.slug}/tree/${encodeURI(b.name)}` : "" });
+    });
+  }
+  return items;
+}
+
+const MAX_BRANCH_ROWS = 10;
+const CI_GLYPH = { pass: `${c.green}✓${c.reset}`, fail: `${c.red}✗${c.reset}`, pending: `${c.yellow}●${c.reset}`, "": `${c.dim}·${c.reset}` };
+const REVIEW_MARK = { APPROVED: `${c.green}approved${c.reset}`, CHANGES_REQUESTED: `${c.red}changes${c.reset}`, REVIEW_REQUIRED: `${c.dim}review${c.reset}` };
+const REPO_SECTION = { pull: ["pr", "PULL REQUESTS"], worktree: ["worktree", "WORKTREES"], branch: ["branch", "BRANCHES WITHOUT PR"] };
+
+function repoRows(w, now) {
+  const v = views.repo;
+  const rows = [];
+  shown.repo.forEach((x, i) => {
+    if (x.kind === "repo-head") {
+      if (rows.length) rows.push({ text: "", i: -1 });
+      const state = x.loading ? `${c.dim}reading…${c.reset}` : x.ghError ? `${c.red}GitHub unavailable${c.reset}` : "";
+      const n = x.counts.reduce((a, b) => a + b, 0);
+      const arrow = v.fold.folded(`repo:${x.repo}`) ? "▸" : "▾";
+      rows.push({ text: spread(`${c.bold}${arrow} ${icon("repository")}${fit(x.title, w - 32)}${c.reset} ${c.dim}· ${n}${c.reset}`, state, w), i });
+      return;
+    }
+    if (x.kind === "section") {
+      const [pict, label] = REPO_SECTION[x.first.kind];
+      rows.push({ text: `${fold(x)} ${c.dim}${icon(pict)}${label} · ${x.n}${c.reset}`, i });
+      return;
+    }
+    let left, right;
+    if (x.kind === "pull") {
+      const review = REVIEW_MARK[x.review] ? ` ${REVIEW_MARK[x.review]}` : "";
+      right = `${c.dim}${x.author ? x.author + " " : ""}${ago(now - x.ts)}${c.reset}`;
+      left = `  ${CI_GLYPH[x.ci]} ${x.draft ? c.dim : ""}${fit(x.title, Math.max(8, w - width(right) - width(review) - 6))}${c.reset}${review}`;
+    } else if (x.kind === "worktree") {
+      const marks = [x.changed ? `${c.yellow}~${x.changed}${c.reset}` : "", x.ahead ? `${c.cyan}↑${x.ahead}${c.reset}` : "",
+        x.behind ? `${c.magenta}↓${x.behind}${c.reset}` : "", x.pull ? `${c.dim}#${x.pull.number}${c.reset}` : ""].filter(Boolean).join(" ");
+      const where = x.path === x.root ? "." : path.basename(x.path);
+      right = `${c.dim}${fitMiddle(where, Math.max(6, Math.floor(w / 3)))}${c.reset}`;
+      left = `  ${x.changed ? `${c.yellow}●${c.reset}` : `${c.green}✓${c.reset}`} ${icon("worktree")}${fit(x.title, Math.max(8, w - width(right) - width(marks) - 8))} ${marks}`;
+    } else {
+      right = `${c.dim}${x.pushed ? "pushed" : "local"} ${ago(now - x.ts)}${c.reset}`;
+      left = `  ${x.pushed ? `${c.cyan}↑${c.reset}` : `${c.dim}○${c.reset}`} ${icon("branch")}${fit(x.title, Math.max(8, w - width(right) - 7))}`;
+    }
+    rows.push({ text: spread(left, right, w), i });
+    if (v.expanded.has(itemKey(x)) && x.value) for (const line of wrap(x.value, w - 6).slice(0, 3)) rows.push({ text: `      ${c.dim}${line}${c.reset}`, i });
+    // At most MAX_BRANCH_ROWS branches per repo, then "+N more" (Space on the last one lists them all).
+    if (x.kind === "branch" && x.at === MAX_BRANCH_ROWS - 1 && x.total > MAX_BRANCH_ROWS && !v.expanded.has(`more:${x.repo}`)) {
+      rows.push({ text: `   ${c.dim}+${x.total - MAX_BRANCH_ROWS} more · Space on the last one shows them${c.reset}`, i: -1 });
+    }
+  });
+  if (!shown.repo.length) rows.push({ text: `${c.dim}  ${session ? "No git repository for this agent yet" : "No supported agent session in this tab"}${c.reset}`, i: -1 });
+  return rows;
+}
+
+const madeRows = (w, now) => itemRows(shown.made, views.made, w, now, session?.outputs ? "Nothing published, pushed or written yet" : "Not tracked for this agent");
+const appsRows = (w, now) => itemRows(shown.apps, views.apps, w, now, "No services, background commands, browser tabs or panes yet");
 
 // Enter or click on a Made/Apps item: pages, PRs, services and tabs open in the browser; files
 // and a background command's output in the File Viewer; a herdr pane gets focus.
@@ -435,8 +557,11 @@ function openItem(x) {
     flashUntil = Date.now() + 3000;
     return render();
   }
-  if (!x.value) { flash = `${c.dim}Nothing to open`; flashUntil = Date.now() + 2000; return render(); }
-  openRef({ kind: x.kind === "file" || x.kind === "task" ? "file" : "url", value: x.value, line: 0 });
+  if (!x.value) {
+    if (x.kind === "branch") return copyRef({ value: x.title }); // a local branch: its name
+    flash = `${c.dim}Nothing to open`; flashUntil = Date.now() + 2000; return render();
+  }
+  openRef({ kind: x.kind === "file" || x.kind === "task" || x.kind === "worktree" ? "file" : "url", value: x.value, line: 0 });
 }
 
 function toggleTodo(t) {
@@ -557,32 +682,43 @@ function draw() {
   const all = session ? session.list(now) : [];
   const running = all.filter((a) => a.status === "running").length;
   // Tab labels, shortened until the bar fits the panel's width.
+  // Fork: a count on every tab (0 included): what is running or waiting in colour, else how many items.
+  const dimN = (n) => `${c.dim}${n}${c.reset}`;
   const counts = {
-    messages: `${c.dim}${session?.turns.length || 0}${c.reset}`, // yours
-    subagents: running ? `${c.yellow}●${running}${c.reset}` : "", // running only, like Claude's own count
-    refs: refs.length ? `${c.dim}${refs.length}${c.reset}` : "",
-    todo: (() => { const n = todos.filter((t) => !t.done).length; return n ? `${c.yellow}○${n}${c.reset}` : ""; })(),
-    made: made.length ? `${c.dim}${made.length}${c.reset}` : "",
-    apps: (() => { const n = apps.filter((x) => x.kind === "task" && x.status === "running").length; return n ? `${c.yellow}●${n}${c.reset}` : apps.length ? `${c.dim}${apps.length}${c.reset}` : ""; })(),
+    messages: dimN(session?.turns.length || 0), // yours
+    subagents: running ? `${c.yellow}●${running}${c.reset}` : dimN(all.length), // running, like Claude's own count, else all
+    refs: dimN(refs.length + seen.length),
+    todo: (() => { const n = todos.filter((t) => !t.done).length; return n ? `${c.yellow}○${n}${c.reset}` : dimN(0); })(),
+    made: dimN(made.length),
+    apps: (() => { const n = apps.filter((x) => x.kind === "task" && x.status === "running").length; return n ? `${c.yellow}●${n}${c.reset}` : dimN(apps.length); })(),
+    repo: (() => {
+      const failing = repoItems.filter((x) => x.kind === "pull" && x.ci === "fail").length;
+      return failing ? `${c.red}✗${failing}${c.reset}` : dimN(repoItems.filter((x) => x.kind === "pull").length);
+    })(),
   };
   const names = [
-    { messages: "Messages", subagents: "Subagents", refs: "Refs", todo: "To do", made: "Made", apps: "Apps" },
-    { messages: "Msgs", subagents: "Agents", refs: "Refs", todo: "To do", made: "Made", apps: "Apps" },
-    { messages: "M", subagents: "A", refs: "R", todo: "D", made: "O", apps: "P" },
+    { messages: "Messages", subagents: "Subagents", refs: "Refs", todo: "To do", made: "Made", apps: "Apps", repo: "Repo" },
+    { messages: "Msgs", subagents: "Agents", refs: "Refs", todo: "To do", made: "Made", apps: "Apps", repo: "Repo" },
+    { messages: "M", subagents: "A", refs: "R", todo: "D", made: "O", apps: "P", repo: "G" },
   ];
   let bar = "";
   if (MODE === "nerd") { // fork: a pictogram before each name; the narrowest bar keeps only the pictogram
     for (const name of TABS) { names[0][name] = icon(name) + names[0][name]; names[1][name] = icon(name) + names[1][name]; names[2][name] = icon(name).trim(); }
   }
-  for (const set of names) {
+  // Widest first: full names, short names, (fork) the shown tab's short name and the others' narrow one, all narrow.
+  const levels = [
+    { label: (n) => names[0][n], gap: " " }, { label: (n) => names[1][n], gap: " " },
+    { label: (n) => (n === tab ? names[1][n] : names[2][n]), gap: " " }, { label: (n) => names[2][n], gap: "" },
+  ];
+  for (const level of levels) {
     let col = 2;
     bar = "";
     tabHits = [];
     for (const name of TABS) {
-      const text = ` ${set[name]}${counts[name] ? " " + counts[name] : ""} `;
+      const text = ` ${level.label(name)}${counts[name] ? " " + counts[name] : ""} `;
       tabHits.push({ from: col, to: col + width(text) - 1, tab: name });
-      bar += (name === tab ? `${c.inverse}${c.bold}${plain(text)}${c.reset}` : text) + (set === names[2] ? "" : " ");
-      col += width(text) + (set === names[2] ? 0 : 1);
+      bar += (name === tab ? `${c.inverse}${c.bold}${plain(text)}${c.reset}` : text) + level.gap;
+      col += width(text) + level.gap.length;
     }
     if (width(bar) <= w) break;
   }
@@ -596,7 +732,7 @@ function draw() {
 
   const v = views[tab];
   const rows = tab === "messages" ? messageRows(w, now) : tab === "refs" ? refRows(w, now) : tab === "todo" ? todoRows(w, now)
-    : tab === "made" ? madeRows(w, now) : tab === "apps" ? appsRows(w, now) : subagentRows(w, now);
+    : tab === "made" ? madeRows(w, now) : tab === "apps" ? appsRows(w, now) : tab === "repo" ? repoRows(w, now) : subagentRows(w, now);
   const bodyH = H - head.length - 1;
   v.maxScroll = Math.max(0, rows.length - bodyH);
   if (v.free) {
@@ -616,22 +752,23 @@ function draw() {
   const sel = v.cursor >= 0 && items().length ? rows.map((r, n) => (r.i === v.cursor ? n : -1)).filter((n) => n >= 0) : [];
   while (sel.length && !plain(rows[sel[sel.length - 1]].text).trim()) sel.pop();
   const barred = new Set(sel);
-  const shown = rows.slice(v.scroll, v.scroll + bodyH).map((r, n) => ({ ...r, bar: barred.has(v.scroll + n) }));
-  screenRows = [...head.map(() => -1), ...shown.map((r) => r.i)];
+  const visible = rows.slice(v.scroll, v.scroll + bodyH).map((r, n) => ({ ...r, bar: barred.has(v.scroll + n) }));
+  screenRows = [...head.map(() => -1), ...visible.map((r) => r.i)];
   tabRow = head.length - 1; // head = header lines, the tab bar, its rule
 
   let help;
   if (busy) help = `${c.yellow}switching…`;
   else if (flash && now < flashUntil) help = flash;
   else if (tab === "messages") help = `${c.dim}click/Enter full message · Space expand · q close`;
-  else if (tab === "refs") help = `${c.dim}click/Enter open · y copy · click ● message · q close`;
+  else if (tab === "refs") help = `${c.dim}click/Enter open · Space fold · y copy · q close`;
   else if (tab === "todo") help = `${c.dim}x done · click/Enter message · y copy · q close`;
-  else if (tab === "made" || tab === "apps") help = `${c.dim}click/Enter open · Space details · y copy · q close`;
+  else if (tab === "made" || tab === "apps" || tab === "repo") help = `${c.dim}click/Enter open · Space details/fold · y copy · q close`;
   else help = `${c.dim}${w >= 58 ? `${session?.provider === "codex" ? "click/Enter read" : "click/Enter open in Claude"} · v read here · f finished · a ${showAll ? "recent" : "all"}` : "click open · v read · f finished"}`;
   const footer = width(help) > w ? `${c.dim}${fit(plain(help), w)}` : help;
 
   let frame = "\x1b[H" + head.map((l) => " " + l + "\x1b[K").join("\n") + "\n";
-  frame += shown.map((r) => (r.bar ? `${c.cyan}▎${c.reset}` : " ") + r.text + "\x1b[K").join("\n") + "\x1b[J";
+  // Fork: a row wider than the panel would wrap and scroll the header off the screen: clipped.
+  frame += visible.map((r) => (r.bar ? `${c.cyan}▎${c.reset}` : " ") + fitLine(r.text, w) + "\x1b[K").join("\n") + "\x1b[J";
   frame += `\x1b[${H};1H ${footer}${c.reset}\x1b[K`;
   out.write(frame);
 }
@@ -646,7 +783,7 @@ function quit({ dismiss = false } = {}) {
     if (me) setDismissed(me.tab_id, true, new Set((snap.tabs || []).map((t) => t.tab_id)));
   }
   unmarkShown();
-  out.write("\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[?1049l");
+  out.write("\x1b[?1000l\x1b[?1006l\x1b[?7h\x1b[?25h\x1b[?1049l");
   process.exit(0);
 }
 
@@ -741,9 +878,12 @@ function popOut(i) {
 
 function activate() { // Enter or click on the current item
   const v = views[tab];
-  if (tab === "refs") return openRef(refs[v.cursor]);
-  if (tab === "made") return openItem(made[v.cursor]);
-  if (tab === "apps") return openItem(apps[v.cursor]);
+  if (shown[tab]) {
+    const x = shown[tab][v.cursor];
+    // A message's header shows the message, a repo's opens it on GitHub; other headers fold.
+    if (x?.kind === "section") return /^msg:\d+$/.test(x.group) ? popOut(Number(x.group.slice(4))) : toggleSection(x);
+    return tab === "refs" ? openRef(x) : openItem(x);
+  }
   if (tab === "todo") return todos[v.cursor] && popOut(todos[v.cursor].msg);
   if (tab === "messages") return popOut(v.cursor);
   const a = agents[v.cursor];
@@ -790,11 +930,10 @@ function onKey(key) {
         if (clicked) setTab(clicked);
       } else if (screenRows[Number(y) - 1] === "finished") {
         return toggleFinished();
-      } else if (/^msg:\d+$/.test(screenRows[Number(y) - 1])) {
-        return popOut(Number(screenRows[Number(y) - 1].slice(4)));
       } else if (screenRows[Number(y) - 1] >= 0) {
         views[tab].cursor = screenRows[Number(y) - 1];
         if (tab === "messages") views.messages.follow = views.messages.cursor === items().length - 1;
+        if (isHeader(items()[views[tab].cursor])) return toggleSection(items()[views[tab].cursor]); // a click on a header folds it
         return activate();
       }
     }
@@ -804,7 +943,7 @@ function onKey(key) {
   if (key === "q") return quit({ dismiss: true });
   if (key === "\t" || key === "\x1b[C") setTab(TABS[(TABS.indexOf(tab) + 1) % TABS.length]); // Tab, →
   else if (key === "\x1b[D") setTab(TABS[(TABS.indexOf(tab) + TABS.length - 1) % TABS.length]); // ←
-  else if (/^[1-6]$/.test(key)) setTab(TABS[Number(key) - 1]);
+  else if (/^[1-7]$/.test(key)) setTab(TABS[Number(key) - 1]);
   else if (key === "j" || key === "\x1b[B") move(1);
   else if (key === "k" || key === "\x1b[A") move(-1);
   else if (key === "g") move(-Infinity);
@@ -812,14 +951,24 @@ function onKey(key) {
   else if (key === "\r") return activate();
   else if (key === " " || key === "l" || key === "h") {
     const v = views[tab];
-    const id = tab === "messages" ? v.cursor : tab === "refs" ? refs[v.cursor]?.value
-      : tab === "made" || tab === "apps" ? (items()[v.cursor] ? itemKey(items()[v.cursor]) : undefined) : agents[v.cursor]?.id;
+    const cur = shown[tab] ? shown[tab][v.cursor] : null;
+    if (isHeader(cur)) return toggleSection(cur); // Space on a header folds or unfolds it
+    // Repo tab: Space on the last shown branch of a repo lists them all (and back).
+    if (cur?.kind === "branch" && (cur.at === MAX_BRANCH_ROWS - 1 || v.expanded.has(`more:${cur.repo}`))) {
+      const k = `more:${cur.repo}`;
+      v.expanded.has(k) ? v.expanded.delete(k) : v.expanded.add(k);
+      rebuildViews();
+    }
+    const id = tab === "messages" ? v.cursor : tab === "refs" ? cur?.value
+      : shown[tab] ? (cur ? itemKey(cur) : undefined) : agents[v.cursor]?.id;
     if (id !== undefined && id !== -1) v.expanded.has(id) ? v.expanded.delete(id) : v.expanded.add(id);
   } else if (key === "m" && tab === "subagents") return openInClaude("main");
   else if (key === "v" && tab === "subagents" && agents[views.subagents.cursor]) openDetail(agents[views.subagents.cursor]);
   else if (key === "a" && tab === "subagents") { showAll = !showAll; refresh(); }
-  else if (key === "y" && tab === "refs") return copyRef(refs[views.refs.cursor]);
-  else if (key === "y" && (tab === "made" || tab === "apps") && items()[views[tab].cursor]?.value) return copyRef(items()[views[tab].cursor]);
+  else if (key === "y" && shown[tab] && items()[views[tab].cursor] && items()[views[tab].cursor].kind !== "section") {
+    const x = items()[views[tab].cursor];
+    return copyRef({ value: x.value || x.title });
+  }
   else if (key === "x" && tab === "todo") return toggleTodo(todos[views.todo.cursor]);
   else if (key === "y" && tab === "todo" && todos[views.todo.cursor]) {
     // A request with a command in it ("Run `herdr server stop`") copies just the command.
@@ -835,7 +984,7 @@ function onKey(key) {
 
 // ---------- main ----------
 
-out.write("\x1b[?1049h\x1b[?25l\x1b[2J\x1b[?1000h\x1b[?1006h"); // mouse clicks and wheel
+out.write("\x1b[?1049h\x1b[?25l\x1b[2J\x1b[?1000h\x1b[?1006h\x1b[?7l"); // mouse clicks and wheel; (fork) no auto-wrap
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {

@@ -88,7 +88,7 @@ or cleared after that):
 
 | Key | Action |
 | --- | --- |
-| `←` / `→`, `Tab`, `1`–`6`, click | Switch tabs |
+| `←` / `→`, `Tab`, `1`–`7`, click | Switch tabs |
 | `j` / `k`, wheel | Move |
 | `g` / `G` | Jump to the first or last item |
 | Enter / click | Messages: show in full (popup) · Subagents: open in Claude · Refs: open |
@@ -96,9 +96,10 @@ or cleared after that):
 | `v` | Subagents: read its conversation in the panel (Esc goes back, `z` zooms) |
 | `a` | Subagents: all of them, or just the last 30 minutes |
 | `m` | Subagents: back to main |
-| `y` | Refs, Made, Apps: copy the URL or path · To do: copy the request |
+| `y` | Refs, Made, Apps, Repo: copy the URL, path or branch · To do: copy the request |
 | `x` | To do: check off or reopen |
 | `f` / click the header | Subagents: fold or unfold the Finished section |
+| Space / click a header | Refs, Made, Apps, Repo: fold or unfold that section (fork) |
 | `q` | Close it in this tab; it still follows you to other Claude tabs. The **agent-panel: show / hide** action brings it back here |
 
 Data comes from Claude Code's own files: the session transcript, each subagent's transcript under
@@ -162,8 +163,11 @@ Run the provider regression tests with `node --test test/*.test.mjs`.
 Two more tabs, filled from the agent's own tool calls and their results (Claude sessions):
 
 - **Made**: Claude pages it published with the Artifact tool (◆, the link to the page),
-  GitHub pull requests, issues and releases its commands printed and branches it pushed (⎇),
-  and files it wrote (✚) or edited (✎). Newest first in each section.
+  what it did on GitHub (⎇): pull requests, issues and releases a command of its created or
+  changed (`gh pr|issue|release create/merge/close/edit/comment/review…`, a `gh api` call that
+  is not a GET) and branches it pushed, and files it wrote (✚) or edited (✎). Newest first in
+  each section. The GitHub links its other commands only printed (a list, a view) are in
+  **Refs**, under **READ BY THE AGENT**.
 - **Apps**: the project's services (● up, ○ down, from your `services-command`, below),
   background commands (● running, ◌ silent for 30 min, ✓ ⊘ ✗ when they end; their output
   file opens), browser tabs it drives through the Chrome extension or Playwright (◎, title
@@ -181,6 +185,44 @@ section is empty.
 
 The panel redraws as soon as the agent's transcript or its subagents folder changes
 (file watching); the one-second timer stays as a fallback.
+
+## Repo, and the project scope (chrysa fork)
+
+The panel works on the agent's **project**: the git work tree of its folder, or, when that
+folder holds many repos, the repos the session edited (3 at most). **Made** shows that
+project's files (one section per repo when several) and GitHub items, and published pages;
+everything else it made (scratch files, other repos) is in **OUTSIDE THE PROJECT**, folded.
+
+**Repo** sums each project repo up:
+
+- **Pull requests**: every open PR of the repo, with CI (`✓` passed, `✗` failed, `●` running,
+  `·` none), review state, author and age; from `gh pr list` every 30 s (your `gh`, so your
+  account for that repo).
+- **Worktrees**: each worktree's branch, uncommitted changes (`~N`), commits ahead/behind
+  (`↑`/`↓`) and its PR number; from `git` every 5 s.
+- **Branches without PR**: local or pushed branches with no open PR, leaving out the default
+  branch, long-lived ones (`main`, `master`, `develop`, `staging`, `production`) and branches
+  whose PR was merged or closed. 10 shown; Space on the last one lists them all.
+
+Enter opens the PR, the worktree's folder, or a pushed branch on GitHub (a local branch: `y`
+copies its name). Without `gh` or network the header says `GitHub unavailable` and git data
+stays.
+
+The repos may come from files the agent edited, so the panel trusts none of them. Every git
+call runs with `--no-lazy-fetch` (an older git than 2.45.1 refuses it: nothing runs) and every
+transport refused (`protocol.<name>.allow=never`, which the repo cannot override): a "partial clone" config can
+no longer make a read fetch a missing object (that fetch would run the repo's `core.sshCommand`
+or `uploadpack`). `status` also runs with `core.fsmonitor=false`, every filter driver switched
+off and submodules ignored, and is skipped when the repo's filters cannot be read.
+
+## Sections and counts (chrysa fork)
+
+In Refs, Made, Apps and Repo every section has a header with its item count (`▾ FILES · 12`).
+A click or Space on a header folds it (`▸`) or unfolds it; the cursor reaches folded headers
+like any item. Enter on a Refs message header (●) shows that message; on a repo's header, opens
+the repo on GitHub. Every tab shows a count, 0 included: in colour what runs or waits
+(`●` running, `○` to do, `✗` failing CI), else how many items it lists. When the full names do
+not fit, the bar keeps the shown tab's name and pictograms (or letters) for the others.
 
 ## Pictograms (chrysa fork)
 

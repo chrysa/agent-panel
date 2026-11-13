@@ -37,6 +37,20 @@ test("GitHub pull requests, releases and pushed branches from command output", (
   assert.deepEqual(titles, ["chrysa/agent-panel pushed feat/x", "chrysa/herdr-cockpit PR #64", "chrysa/herdr-cockpit release v0.8.0"]);
 });
 
+test("links a command only printed are read (Refs); a write verb makes them Made", () => {
+  const o = new Outputs();
+  use(o, "l", "Bash", { command: "gh issue list --repo kryptamine/herdr-auto-title" });
+  result(o, "l", "https://github.com/kryptamine/herdr-auto-title/issues/19\nhttps://github.com/chrysa/x/pull/3");
+  use(o, "g", "Bash", { command: "gh api -X GET repos/chrysa/x/pulls -f state=open" });
+  result(o, "g", "https://github.com/chrysa/x/pull/4");
+  use(o, "m", "Bash", { command: "gh pr merge 3 --repo chrysa/x --squash" });
+  result(o, "m", "merged https://github.com/chrysa/x/pull/3", 5);
+  use(o, "c", "Bash", { command: "gh api repos/chrysa/x/issues/9/comments -f body=ok" });
+  result(o, "c", "https://github.com/chrysa/x/issues/9");
+  assert.deepEqual(o.made().map((x) => x.title).sort(), ["chrysa/x PR #3", "chrysa/x issue #9"]);
+  assert.deepEqual(o.seen().map((x) => x.title).sort(), ["chrysa/x PR #4", "kryptamine/herdr-auto-title issue #19"]);
+});
+
 test("a background command runs until its notification, with its output file", () => {
   const o = new Outputs();
   use(o, "t", "Bash", { command: "npm run dev", description: "Dev server" });

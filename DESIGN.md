@@ -16,9 +16,10 @@
   [herdr-plugin.toml](herdr-plugin.toml))
 - **Lifecycle:** shipped upstream (0.4.2); this repository is a fork kept in sync by a weekly
   pull request ([upstream-sync.yml](.github/workflows/upstream-sync.yml)). Fork additions:
-  [header.mjs](src/header.mjs), the `shown/<pane id>` marker, the *Made* and *Apps* tabs
-  ([outputs.mjs](src/outputs.mjs), [services.mjs](src/services.mjs)) and file watching
-  for real-time redraws (owner request 2026-11-09).
+  [header.mjs](src/header.mjs), the `shown/<pane id>` marker, the *Made*, *Apps* and *Repo*
+  tabs ([outputs.mjs](src/outputs.mjs), [services.mjs](src/services.mjs),
+  [project.mjs](src/project.mjs)), file watching for real-time redraws, and the scope to the
+  agent's project (owner requests 2026-11-09).
 - **Detailed specs:** none; user documentation in [README.md](README.md).
 
 ## 2. Users, devices and priority tasks
@@ -48,14 +49,32 @@ Primary action per tab: *Subagents* — open the running subagent; *Messages* �
   `<cwd> <provider> <session id> <agent pane id>`; up to six lines are shown above the tab bar,
   colours kept, other control sequences dropped. **[implemented]** ([header.mjs](src/header.mjs))
 - **J5 — What it made (fork):** *Made* lists Claude pages published with the Artifact tool,
-  GitHub PRs, issues, releases and pushed branches from its command output, and files it
-  wrote (`✚`) or edited (`✎`) → Enter opens. **[implemented]** ([outputs.mjs](src/outputs.mjs))
+  the GitHub PRs, issues and releases a command of its created or changed (a write verb of
+  `gh`, a `gh api` call that is not a GET) and the branches it pushed, and files it wrote
+  (`✚`) or edited (`✎`) → Enter opens. GitHub links its other commands only printed go to
+  *Refs*, section *READ BY THE AGENT*. **[implemented]** ([outputs.mjs](src/outputs.mjs))
 - **J6 — What it runs (fork):** *Apps* lists the project's services (`services-command`,
   every 3 s), background commands (running until their task notification, `◌` after 30 min
   without output), browser tabs it drives (Chrome extension's live tab list, Playwright
   navigations) and herdr panes its commands acted on → Enter opens or focuses.
   **[implemented]** ([outputs.mjs](src/outputs.mjs), [services.mjs](src/services.mjs))
-- **Information architecture:** six tabs (`←`/`→`, `Tab`, `1`–`6`, click); a footer names the
+- **J7 — The project on GitHub (fork):** the project is the agent's git work tree, else the
+  repos the session edited (3 at most). *Repo* sums each up: open pull requests (CI `✓ ✗ ●`,
+  review, author, age; `gh pr list` every 30 s through the user's `gh`), worktrees (branch,
+  `~` changed files, `↑`/`↓`, the branch's PR; `git` every 5 s) and branches without a PR
+  (not the default or a long-lived branch, nor one whose PR was merged or closed; 10 shown,
+  Space on the last lists all) → Enter opens the PR, the worktree's folder or the pushed
+  branch. *Made* is scoped to the same project: its files (grouped by repo when several) and
+  GitHub items of its repos, and published pages; the rest sits in *OUTSIDE THE PROJECT*,
+  folded. A repo reached through an edited file is not trusted: git runs without lazy fetch or
+  transport (`--no-lazy-fetch`, `protocol.<name>.allow=never` per protocol), and `git status` with the repo's
+  fsmonitor, filter drivers and submodules switched off, skipped when its filters cannot be read. **[implemented]** ([project.mjs](src/project.mjs))
+- **J8 — Fold sections (fork):** in *Refs*, *Made*, *Apps* and *Repo* each section has a header
+  with its item count (`▾ FILES · 12`); click or Space folds it (`▸`) or unfolds it, and the
+  cursor reaches a folded header like any item. Enter on a message header (*Refs*) shows the
+  message, on a repo header opens the repo. Every tab shows a count, 0 included.
+  **[implemented]** ([sections.mjs](src/sections.mjs))
+- **Information architecture:** seven tabs (`←`/`→`, `Tab`, `1`–`7`, click); a footer names the
   keys of the current tab; `q` closes the panel in this tab only, the *show / hide* action brings
   it back. Key table: [README.md](README.md).
 - **Density:** compact — a message uses up to three lines, the *Finished* section folds (`f`).
@@ -80,8 +99,10 @@ carries a cyan bar in the margin. **[implemented]** ([text.mjs](src/text.mjs))
 | Layout | `SIDE_RATIO` in [lib.mjs](src/lib.mjs); pane sizes in [herdr-plugin.toml](herdr-plugin.toml) | agent keeps 78 % of the tab |
 | Text fitting | `fit`, `fitMiddle`, `wrap`, `charWidth` in [text.mjs](src/text.mjs) | cut with `…`; paths keep their end; wide characters count double |
 | Header (fork) | `EVERY_MS`, `MAX_LINES` in [header.mjs](src/header.mjs) | 3 s, six lines; colour only when the line fits |
+| Repo (fork) | `PR_EVERY_MS`, `GIT_EVERY_MS`, `MAX_REPOS`, `LONG_LIVED` in [project.mjs](src/project.mjs); `MAX_BRANCH_ROWS`, `CI_GLYPH` in [panel.mjs](src/panel.mjs) | 30 s GitHub, 5 s git, 3 repos, 10 branches shown |
 | Pictograms (fork) | `GLYPHS`, `BY_EXT` in [icons.mjs](src/icons.mjs) | Nerd Font v3, one glyph + a space, off unless `icons` says `nerd` |
-| Made / Apps (fork) | `ITEM_ICON`, `SECTION` in [panel.mjs](src/panel.mjs); `QUIET_MS` in [outputs.mjs](src/outputs.mjs) | one glyph per kind, a dim section header per kind; services plain text only |
+| Made / Apps (fork) | `ITEM_ICON`, `SECTION` in [panel.mjs](src/panel.mjs); `QUIET_MS`, `GH_WRITE` in [outputs.mjs](src/outputs.mjs) | one glyph per kind, a dim section header per kind; services plain text only |
+| Sections (fork) | `sectioned`, `foldState` in [sections.mjs](src/sections.mjs); `FOLDED_FIRST` in [panel.mjs](src/panel.mjs) | `▾`/`▸` + label + `· count`; *OUTSIDE THE PROJECT* starts folded |
 | Motion | none | terminal output does not animate |
 
 - **Shared contract:** `contract.css` and `@chrysa/ui` do not apply to a terminal surface.
@@ -96,7 +117,7 @@ carries a cyan bar in the margin. **[implemented]** ([text.mjs](src/text.mjs))
   | State | Where it appears | Behaviour |
   | --- | --- | --- |
   | Loading | panel, header | no loading text; the header stays empty until its first run |
-  | Empty | every tab | `No messages yet`, `No subagents in this session`, `None in the last 30 min — a shows all`, `The agent hasn't mentioned any URLs or files yet`, `Nothing published, pushed or written yet`, `No services, background commands, browser tabs or panes yet`, `Not tracked for this agent` (Codex, Made), `No supported agent session in this tab` |
+  | Empty | every tab | `No messages yet`, `No subagents in this session`, `None in the last 30 min — a shows all`, `The agent hasn't mentioned any URLs or files yet`, `Nothing published, pushed or written yet`, `No services, background commands, browser tabs or panes yet`, `No git repository for this agent yet`, `Not tracked for this agent` (Codex, Made), `No supported agent session in this tab` |
   | Error | refs, header | missing files dimmed with `?`; a failing header command hides the header without a message |
   | Offline / backend unreachable | panel | data is local; when the agent quits, the panel closes after 5 s |
   | Stale data | subagents, to do | `◌` stalled after 5 min of silence; the To-do header shows the list's age |
@@ -111,8 +132,10 @@ carries a cyan bar in the margin. **[implemented]** ([text.mjs](src/text.mjs))
 ## 7. Responsive and support conventions
 
 Needs herdr ≥ 0.8.2 and Node.js. Alternate screen, SGR mouse reporting (clicks and wheel) and a
-full redraw on resize. In a narrow panel tab names shorten (`Messages` → `Msgs` → `M`) and the
-footer is cut with `…`. Every mouse action has a key.
+full redraw on resize. In a narrow panel tab names shorten (`Messages` → `Msgs`, then (fork)
+only the shown tab keeps its name, then `M`) and the footer is cut with `…`. (fork) Auto-wrap
+is off and every row is cut to the panel's width, so a long row can never scroll the header
+and the tab bar off the screen. Every mouse action has a key.
 
 ## 8. Accessibility
 
@@ -144,6 +167,8 @@ are code points of the user's own Nerd Font.
   | Date | Change | Checks run (tool, sizes, modes) | Result | Not run, and why |
   | --- | --- | --- | --- | --- |
   | 2026-11-08 | contract written from the code | source review | gaps listed in §11 | no terminal run: documentation-only change |
+  | 2026-11-09 | Sections that fold, with counts; Made/Refs split by action; rows never wrap (fork) | `node --test` (40, with real repos whose fsmonitor, filter and partial-clone sshCommand run under plain `git status` and not under the panel's git calls); panel outside herdr (tmux 44, 66 and 110 columns, `AGENT_PANEL_ICONS=nerd`) on this session: Made, Refs, Apps, Repo | headers `▾ LABEL · N`, Space folds, *OUTSIDE THE PROJECT* folded, *READ BY THE AGENT* in Refs, no row wider than the panel, every tab counted | not run inside herdr before merge |
+  | 2026-11-09 | Repo tab, Made scoped to the project (fork) | `node --test` (33); panel outside herdr (tmux 76×40) with the agent in herdr-cockpit (1 repo), in padam-av (Optiways, 21 PRs through the scope's account) and in a folder of repos (3 repos, files grouped) | sections, CI and review marks, branch filtering as specified | not run inside herdr before merge |
   | 2026-11-09 | Nerd Font pictograms (fork, opt-in) | `node --test` (27); panel outside herdr, tmux 72×26, `AGENT_PANEL_ICONS=nerd` and `plain` | nerd: pictogram tab bar, kind and file-type glyphs; plain: unchanged | not run inside herdr before merge |
   | 2026-11-09 | Made and Apps tabs, file watching (fork) | `node --test` (24); panel run outside herdr (`SA_SESSION`, tmux 70×40) on a real session: Made 62 items, Apps services/background/panes | sections, glyphs and empty states as specified | not run inside herdr before merge (the installed plugin is pinned) |
 
